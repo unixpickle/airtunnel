@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -86,16 +87,19 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		case "response.created":
 			id := extractResponseID(obj)
 			if id != "" {
+				log.Printf("openai: response created id=%s", id)
 				onEvent(StreamEvent{ResponseID: id})
 			}
 		case "response.output_text.delta":
 			delta := extractDelta(obj)
 			if delta != "" {
+				log.Printf("openai: delta len=%d", len(delta))
 				onEvent(StreamEvent{Delta: delta})
 			}
 		case "response.completed", "response.output_text.done":
 			id := extractResponseID(obj)
 			if id != "" {
+				log.Printf("openai: response completed id=%s", id)
 				onEvent(StreamEvent{ResponseID: id})
 			}
 			onEvent(StreamEvent{Done: true})
@@ -105,6 +109,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			if errMsg == "" {
 				errMsg = "openai error"
 			}
+			log.Printf("openai: error=%s", errMsg)
 			onEvent(StreamEvent{Error: errMsg})
 			return nil
 		}

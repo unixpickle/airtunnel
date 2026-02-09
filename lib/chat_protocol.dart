@@ -62,6 +62,7 @@ class DnsChatClient {
     var backoffIndex = 0;
     final errorBuffer = StringBuffer();
     var sawError = false;
+    var sawDelta = false;
     const backoff = [
       Duration(milliseconds: 500),
       Duration(seconds: 2),
@@ -93,6 +94,9 @@ class DnsChatClient {
             sawError = true;
           } else {
             yield ChatChunk(delta: text);
+            if (text.isNotEmpty) {
+              sawDelta = true;
+            }
           }
         }
         nextOffset += response.data.length;
@@ -101,6 +105,9 @@ class DnsChatClient {
             throw StateError(errorBuffer.toString().trim().isEmpty
                 ? 'Server error'
                 : errorBuffer.toString());
+          }
+          if (!sawDelta) {
+            throw StateError('No response text received.');
           }
           yield ChatChunk(done: true);
           break;

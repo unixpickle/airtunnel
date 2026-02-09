@@ -1,0 +1,58 @@
+package main
+
+import (
+	"encoding/base32"
+	"strings"
+)
+
+var base32Encoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+func encodeBase32(data []byte) string {
+	return base32Encoding.EncodeToString(data)
+}
+
+func decodeBase32(s string) ([]byte, error) {
+	s = strings.ToLower(s)
+	return base32Encoding.DecodeString(s)
+}
+
+func maxEncodedChars(root string) int {
+	root = strings.TrimSuffix(root, ".")
+	if root == "" {
+		return 0
+	}
+	rootLen := len(root)
+	maxTotal := 253
+	best := 0
+	for n := 0; n <= maxTotal; n++ {
+		labels := (n + 62) / 63
+		dots := 0
+		if labels > 1 {
+			dots = labels - 1
+		}
+		total := n + dots + 1 + rootLen
+		if total <= maxTotal {
+			best = n
+		}
+	}
+	return best
+}
+
+func maxBytesForChars(maxChars int) int {
+	max := 0
+	for b := 0; b <= 2048; b++ {
+		enc := (b*8 + 4) / 5
+		if enc <= maxChars {
+			max = b
+		}
+	}
+	return max
+}
+
+func maxRequestSize(root string) int {
+	return maxBytesForChars(maxEncodedChars(root))
+}
+
+func maxResponseSize() int {
+	return maxBytesForChars(255)
+}

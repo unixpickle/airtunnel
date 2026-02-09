@@ -69,19 +69,23 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 	m.Authoritative = true
 
 	if len(r.Question) == 0 {
+		log.Printf("dns: no question from %s", w.RemoteAddr())
 		m.Rcode = dns.RcodeFormatError
 		_ = w.WriteMsg(m)
 		return
 	}
 
 	q := r.Question[0]
+	log.Printf("dns: query name=%s type=%d class=%d from=%s", q.Name, q.Qtype, q.Qclass, w.RemoteAddr())
 	payload, ok := decodeQuestion(root, q)
 	if !ok {
+		log.Printf("dns: name not under root or decode failed name=%s root=%s", q.Name, root)
 		m.Rcode = dns.RcodeNameError
 		_ = w.WriteMsg(m)
 		return
 	}
 	if len(payload) > maxReq {
+		log.Printf("dns: payload too large len=%d max=%d", len(payload), maxReq)
 		m.Rcode = dns.RcodeFormatError
 		_ = w.WriteMsg(m)
 		return
@@ -89,11 +93,13 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 
 	respPayload, ok := processPayload(payload, priv, sessions, app)
 	if !ok {
+		log.Printf("dns: app processing failed len=%d", len(payload))
 		m.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(m)
 		return
 	}
 	if len(respPayload) > maxResp {
+		log.Printf("dns: response too large len=%d max=%d", len(respPayload), maxResp)
 		m.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(m)
 		return
@@ -109,13 +115,16 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 		Txt: []string{encodeBase32(respPayload)},
 	}
 	m.Answer = append(m.Answer, txt)
+	log.Printf("dns: respond len=%d txt_len=%d", len(respPayload), len(txt.Txt[0]))
 	_ = w.WriteMsg(m)
 }
 
 func processPayload(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer) ([]byte, bool) {
 	if len(payload) >= 2 && payload[0] == protoVersion && payload[1] == handshakeRequest {
+		log.Printf("app: handshake request len=%d", len(payload))
 		return handleHandshake(payload, priv, sessions)
 	}
+	log.Printf("app: encrypted payload len=%d", len(payload))
 	return handleEncrypted(payload, sessions, app)
 }
 

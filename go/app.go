@@ -94,9 +94,11 @@ func (a *AppServer) handleChunk(payload []byte) ([]byte, error) {
 	data := payload[headerChunkSize:]
 
 	if int(total) > a.maxTotal {
+		log.Printf("app: request too large total=%d max=%d", total, a.maxTotal)
 		return a.errorResp(msgID, "request too large"), nil
 	}
 	if int(offset)+len(data) > int(total) {
+		log.Printf("app: chunk out of range offset=%d len=%d total=%d", offset, len(data), total)
 		return a.errorResp(msgID, "chunk out of range"), nil
 	}
 
@@ -125,6 +127,7 @@ func (a *AppServer) handleChunk(payload []byte) ([]byte, error) {
 	a.mu.Unlock()
 
 	if completeData != nil {
+		log.Printf("app: received full request total=%d", len(completeData))
 		go a.processRequest(msgID, completeData)
 	}
 	return a.ackResp(msgID, offset), nil
@@ -141,6 +144,7 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 	resp := a.responses[string(msgID)]
 	a.mu.Unlock()
 	if resp == nil {
+		log.Printf("app: poll unknown msg_id")
 		return a.errorResp(msgID, "unknown message id"), nil
 	}
 
@@ -148,14 +152,17 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 	defer resp.mu.Unlock()
 
 	if resp.ResponseID != "" && !resp.MetaSent {
+		log.Printf("app: sending response_id=%s", resp.ResponseID)
 		resp.MetaSent = true
 		return a.metaResp(msgID, resp.ResponseID), nil
 	}
 	if resp.ErrorMsg != "" {
+		log.Printf("app: response error=%s", resp.ErrorMsg)
 		return a.errorResp(msgID, resp.ErrorMsg), nil
 	}
 
 	if int(nextOffset) < len(resp.Buffer) {
+		log.Printf("app: sending chunk offset=%d total=%d done=%v", nextOffset, len(resp.Buffer), resp.Done)
 		end := len(resp.Buffer)
 		if a.respChunk > 0 && int(nextOffset)+a.respChunk < end {
 			end = int(nextOffset) + a.respChunk
@@ -165,6 +172,7 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 		return a.responseResp(msgID, nextOffset, data, done, false), nil
 	}
 	if resp.Done {
+		log.Printf("app: done with empty chunk offset=%d", nextOffset)
 		return a.responseResp(msgID, nextOffset, nil, true, false), nil
 	}
 	return a.responseResp(msgID, nextOffset, nil, false, true), nil
@@ -173,10 +181,12 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 func (a *AppServer) processRequest(msgID []byte, data []byte) {
 	var req ChatRequest
 	if err := json.Unmarshal(data, &req); err != nil {
+		log.Printf("app: invalid request json: %v", err)
 		a.setResponseError(msgID, "invalid request")
 		return
 	}
 	if req.APIKey == "" || req.Message == "" {
+		log.Printf("app: missing api_key or message")
 		a.setResponseError(msgID, "missing api_key or message")
 		return
 	}

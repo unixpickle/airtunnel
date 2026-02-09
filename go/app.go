@@ -18,6 +18,7 @@ const (
 	appTypeMeta     = 0x84
 	appFlagDone     = 0x01
 	appFlagPending  = 0x02
+	appFlagError    = 0x04
 	msgIDSize       = 8
 	headerChunkSize = 1 + msgIDSize + 4 + 4
 	headerRespSize  = 1 + msgIDSize + 4 + 1
@@ -45,6 +46,7 @@ type ResponseState struct {
 	Done       bool
 	ResponseID string
 	ErrorMsg   string
+	IsError    bool
 	MetaSent   bool
 }
 
@@ -156,11 +158,6 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 		resp.MetaSent = true
 		return a.metaResp(msgID, resp.ResponseID), nil
 	}
-	if resp.ErrorMsg != "" {
-		log.Printf("app: response error=%s", resp.ErrorMsg)
-		return a.errorResp(msgID, resp.ErrorMsg), nil
-	}
-
 	if int(nextOffset) < len(resp.Buffer) {
 		log.Printf("app: sending chunk offset=%d total=%d done=%v", nextOffset, len(resp.Buffer), resp.Done)
 		end := len(resp.Buffer)
@@ -169,13 +166,13 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 		}
 		data := resp.Buffer[int(nextOffset):end]
 		done := resp.Done && end == len(resp.Buffer)
-		return a.responseResp(msgID, nextOffset, data, done, false), nil
+		return a.responseResp(msgID, nextOffset, data, done, false, resp.IsError), nil
 	}
 	if resp.Done {
 		log.Printf("app: done with empty chunk offset=%d", nextOffset)
-		return a.responseResp(msgID, nextOffset, nil, true, false), nil
+		return a.responseResp(msgID, nextOffset, nil, true, false, resp.IsError), nil
 	}
-	return a.responseResp(msgID, nextOffset, nil, false, true), nil
+	return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 }
 
 func (a *AppServer) processRequest(msgID []byte, data []byte) {
@@ -235,6 +232,10 @@ func (a *AppServer) setResponseError(msgID []byte, msg string) {
 	state.mu.Lock()
 	state.ErrorMsg = msg
 	state.Done = true
+	state.IsError = true
+	if len(state.Buffer) == 0 {
+		state.Buffer = []byte(msg)
+	}
 	state.mu.Unlock()
 }
 
@@ -246,7 +247,7 @@ func (a *AppServer) ackResp(msgID []byte, offset uint32) []byte {
 	return b
 }
 
-func (a *AppServer) responseResp(msgID []byte, offset uint32, data []byte, done bool, pending bool) []byte {
+func (a *AppServer) responseResp(msgID []byte, offset uint32, data []byte, done bool, pending bool, isError bool) []byte {
 	b := make([]byte, 1+msgIDSize+4+1+len(data))
 	b[0] = appTypeResp
 	copy(b[1:], msgID)
@@ -257,6 +258,9 @@ func (a *AppServer) responseResp(msgID []byte, offset uint32, data []byte, done 
 	}
 	if pending {
 		flags |= appFlagPending
+	}
+	if isError {
+		flags |= appFlagError
 	}
 	b[1+msgIDSize+4] = flags
 	copy(b[1+msgIDSize+4+1:], data)
@@ -274,7 +278,7 @@ func (a *AppServer) metaResp(msgID []byte, responseID string) []byte {
 }
 
 func (a *AppServer) errorResp(msgID []byte, msg string) []byte {
-	msgBytes := []byte(msg)
+	msgBytes := []byte(a.truncateError(msg))
 	b := make([]byte, 1+msgIDSize+1+len(msgBytes))
 	b[0] = appTypeError
 	if msgID != nil {
@@ -283,6 +287,20 @@ func (a *AppServer) errorResp(msgID []byte, msg string) []byte {
 	b[1+msgIDSize] = 1
 	copy(b[1+msgIDSize+1:], msgBytes)
 	return b
+}
+
+func (a *AppServer) truncateError(msg string) string {
+	maxLen := a.maxResp - (1 + msgIDSize + 1)
+	if maxLen < 0 {
+		maxLen = 0
+	}
+	if len(msg) <= maxLen {
+		return msg
+	}
+	if maxLen <= 3 {
+		return msg[:maxLen]
+	}
+	return msg[:maxLen-3] + "..."
 }
 
 func assembleChunks(state *UploadState) ([]byte, bool) {

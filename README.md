@@ -47,7 +47,7 @@ an ECDH-based handshake.
 - Poll: `type=0x02 | msg_id(8) | next_offset(4)`
 - Ack: `type=0x81 | msg_id(8) | offset(4)`
 - Response chunk: `type=0x82 | msg_id(8) | offset(4) | flags(1) | data`
-  - `flags`: bit0=done, bit1=pending
+  - `flags`: bit0=done, bit1=pending, bit2=error
 - Meta: `type=0x84 | msg_id(8) | response_id_len(2) | response_id`
 
 Request JSON:

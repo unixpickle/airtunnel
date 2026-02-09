@@ -30,6 +30,7 @@ class DnsChatClient {
 
   static const int _flagDone = 0x01;
   static const int _flagPending = 0x02;
+  static const int _flagError = 0x04;
 
   static const int _msgIdSize = 8;
   static const int _offsetSize = 4;
@@ -59,6 +60,8 @@ class DnsChatClient {
 
     var nextOffset = 0;
     var backoffIndex = 0;
+    final errorBuffer = StringBuffer();
+    var sawError = false;
     const backoff = [
       Duration(milliseconds: 500),
       Duration(seconds: 2),
@@ -85,10 +88,20 @@ class DnsChatClient {
         backoffIndex = 0;
         if (response.data.isNotEmpty) {
           final text = utf8.decode(response.data, allowMalformed: true);
-          yield ChatChunk(delta: text);
+          if (response.isError) {
+            errorBuffer.write(text);
+            sawError = true;
+          } else {
+            yield ChatChunk(delta: text);
+          }
         }
         nextOffset += response.data.length;
         if (response.done) {
+          if (sawError) {
+            throw StateError(errorBuffer.toString().trim().isEmpty
+                ? 'Server error'
+                : errorBuffer.toString());
+          }
           yield ChatChunk(done: true);
           break;
         }
@@ -176,7 +189,7 @@ class DnsChatClient {
       if (parsed.pending) {
         return _PollPending();
       }
-      return _PollChunk(parsed.data, parsed.done);
+      return _PollChunk(parsed.data, parsed.done, parsed.isError);
     }
     return _PollPending();
   }
@@ -218,7 +231,8 @@ class DnsChatClient {
       final data = resp.sublist(1 + _msgIdSize + _offsetSize + 1);
       final done = (flags & _flagDone) != 0;
       final pending = (flags & _flagPending) != 0;
-      return _ChunkResp(data, done: done, pending: pending);
+      final isError = (flags & _flagError) != 0;
+      return _ChunkResp(data, done: done, pending: pending, isError: isError);
     }
     return _ErrorResp('Unknown response type');
   }
@@ -245,20 +259,23 @@ class _MetaResp extends _ParsedResp {
 }
 
 class _ChunkResp extends _ParsedResp {
-  _ChunkResp(this.data, {required this.done, required this.pending});
+  _ChunkResp(this.data,
+      {required this.done, required this.pending, required this.isError});
 
   final Uint8List data;
   final bool done;
   final bool pending;
+  final bool isError;
 }
 
 class _PollResult {}
 
 class _PollChunk extends _PollResult {
-  _PollChunk(this.data, this.done);
+  _PollChunk(this.data, this.done, this.isError);
 
   final Uint8List data;
   final bool done;
+  final bool isError;
 }
 
 class _PollPending extends _PollResult {}

@@ -80,7 +80,7 @@ func (a *AppServer) Handle(payload []byte) ([]byte, error) {
 	case appTypePoll:
 		return a.handlePoll(payload)
 	default:
-		return a.errorResp(nil, "unknown message type")
+		return a.errorResp(nil, "unknown message type"), nil
 	}
 }
 

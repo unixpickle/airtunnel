@@ -4,6 +4,8 @@
 .pub-cache/
 .pub/
 build/
+.flutter-plugins
+.flutter-plugins-dependencies
 
 # Flutter platform
 android/.gradle/
@@ -44,3 +46,7 @@ windows/flutter/ephemeral/
 keys/
 *.pem
 *.key
+
+# Go build
+go/dnsecho
+go/*.exe

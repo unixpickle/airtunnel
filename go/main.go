@@ -48,11 +48,13 @@ func main() {
 	log.Printf("root=%s max_request_bytes=%d max_response_bytes=%d", root, maxReq, maxResp)
 	log.Printf("max_plaintext_request_bytes=%d", maxReq-(sessionIDSize+nonceSize+16))
 	log.Printf("max_plaintext_response_bytes=%d", maxResp-(sessionIDSize+nonceSize+16))
+	log.Printf("max_request_total_bytes=%d", maxReq*128)
 
 	sessions := NewSessionStore()
+	app := NewAppServer(maxReq, maxResp)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
-		handleRequest(w, r, root, priv, sessions, maxReq, maxResp)
+		handleRequest(w, r, root, priv, sessions, app, maxReq, maxResp)
 	})
 
 	log.Printf("listening on %s", addr)
@@ -61,7 +63,7 @@ func main() {
 	}
 }
 
-func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.PrivateKey, sessions *SessionStore, maxReq, maxResp int) {
+func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer, maxReq, maxResp int) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -85,7 +87,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 		return
 	}
 
-	respPayload, ok := processPayload(payload, priv, sessions)
+	respPayload, ok := processPayload(payload, priv, sessions, app)
 	if !ok {
 		m.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(m)
@@ -110,11 +112,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 	_ = w.WriteMsg(m)
 }
 
-func processPayload(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore) ([]byte, bool) {
+func processPayload(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer) ([]byte, bool) {
 	if len(payload) >= 2 && payload[0] == protoVersion && payload[1] == handshakeRequest {
 		return handleHandshake(payload, priv, sessions)
 	}
-	return handleEncrypted(payload, sessions)
+	return handleEncrypted(payload, sessions, app)
 }
 
 func handleHandshake(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore) ([]byte, bool) {
@@ -150,7 +152,7 @@ func handleHandshake(payload []byte, priv ed25519.PrivateKey, sessions *SessionS
 	return resp, true
 }
 
-func handleEncrypted(payload []byte, sessions *SessionStore) ([]byte, bool) {
+func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]byte, bool) {
 	minLen := sessionIDSize + nonceSize + 16
 	if len(payload) < minLen {
 		return nil, false
@@ -169,11 +171,16 @@ func handleEncrypted(payload []byte, sessions *SessionStore) ([]byte, bool) {
 		return nil, false
 	}
 
+	respPayload, err := app.Handle(plaintext)
+	if err != nil {
+		return nil, false
+	}
+
 	respNonce, err := randomBytes(nonceSize)
 	if err != nil {
 		return nil, false
 	}
-	respCipher, err := encryptAESGCM(key, respNonce, plaintext, id)
+	respCipher, err := encryptAESGCM(key, respNonce, respPayload, id)
 	if err != nil {
 		return nil, false
 	}

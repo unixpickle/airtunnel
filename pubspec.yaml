@@ -9,6 +9,7 @@ dependencies:
   flutter:
     sdk: flutter
   cryptography: ^2.7.0
+  shared_preferences: ^2.2.3
 
 flutter:
   uses-material-design: true

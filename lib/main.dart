@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'chat_protocol.dart';
 import 'dns_server.dart';
-import 'secure_channel.dart';
 
 void main() {
   runApp(const DnsApp());
@@ -16,38 +17,72 @@ class DnsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Raw DNS',
+      title: 'DNS Chat',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: const DnsHome(),
+      home: const ChatHome(),
     );
   }
 }
 
-class DnsHome extends StatefulWidget {
-  const DnsHome({super.key});
+class ChatMessage {
+  ChatMessage({required this.role, required this.text});
 
-  @override
-  State<DnsHome> createState() => _DnsHomeState();
+  final String role;
+  String text;
 }
 
-class _DnsHomeState extends State<DnsHome> {
+class ChatHome extends StatefulWidget {
+  const ChatHome({super.key});
+
+  @override
+  State<ChatHome> createState() => _ChatHomeState();
+}
+
+class _ChatHomeState extends State<ChatHome> {
   final _rootController =
       TextEditingController(text: 'someserver.google.com');
   final _serverController = TextEditingController();
-  final _sendController = TextEditingController(text: 'hello');
-  Uint8List? _response;
-  String? _responseText;
-  String? _error;
-  bool _loading = false;
+  final _apiKeyController = TextEditingController();
+  final _inputController = TextEditingController();
+  final _messages = <ChatMessage>[];
+
   List<String> _detectedServers = const [];
+  String? _previousResponseId;
+  bool _sending = false;
+  String? _error;
+
+  static const _prefsApiKey = 'openai_api_key';
+  static const _prefsPrevResponse = 'previous_response_id';
 
   @override
   void initState() {
     super.initState();
+    _loadPrefs();
     _loadDnsServers();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _apiKeyController.text = prefs.getString(_prefsApiKey) ?? '';
+      _previousResponseId = prefs.getString(_prefsPrevResponse);
+    });
+  }
+
+  Future<void> _savePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsApiKey, _apiKeyController.text.trim());
+    if (_previousResponseId == null) {
+      await prefs.remove(_prefsPrevResponse);
+    } else {
+      await prefs.setString(_prefsPrevResponse, _previousResponseId!);
+    }
   }
 
   Future<void> _loadDnsServers() async {
@@ -64,79 +99,106 @@ class _DnsHomeState extends State<DnsHome> {
     });
   }
 
-  Future<void> _runQuery() async {
+  Future<void> _sendMessage() async {
+    final apiKey = _apiKeyController.text.trim();
     final root = _rootController.text.trim();
     final server = _serverController.text.trim();
-    final text = _sendController.text;
-    if (root.isEmpty) {
+    final text = _inputController.text.trim();
+    if (apiKey.isEmpty || root.isEmpty || text.isEmpty) {
       setState(() {
-        _error = 'Enter a root domain.';
-        _response = null;
-        _responseText = null;
+        _error = 'API key, root domain, and message are required.';
       });
       return;
     }
 
     setState(() {
-      _loading = true;
+      _sending = true;
       _error = null;
-      _response = null;
-      _responseText = null;
+      _messages.add(ChatMessage(role: 'user', text: text));
+      _messages.add(ChatMessage(role: 'assistant', text: ''));
     });
 
+    _inputController.clear();
+    await _savePrefs();
+
+    final chosenServer = server.isEmpty
+        ? (_detectedServers.isNotEmpty ? '${_detectedServers.first}:53' : '1.1.1.1:53')
+        : server;
+
     try {
-      final chosenServer = server.isEmpty
-          ? (_detectedServers.isNotEmpty ? '${_detectedServers.first}:53' : '1.1.1.1:53')
-          : server;
-      final client =
-          EncryptedDnsClient(rootDomain: root, server: chosenServer);
-      final payload = Uint8List.fromList(utf8.encode(text));
-      final bytes = await client.send(payload);
-      setState(() {
-        _response = bytes;
-        if (bytes.isEmpty) {
-          _error = 'No response (or timeout).';
-        } else {
-          _responseText = utf8.decode(bytes, allowMalformed: true);
+      final client = DnsChatClient(rootDomain: root, server: chosenServer);
+      final stream = client.sendMessage(
+        apiKey: apiKey,
+        model: 'gpt-4o-mini',
+        message: text,
+        previousResponseId: _previousResponseId,
+      );
+
+      await for (final chunk in stream) {
+        if (chunk.responseId != null) {
+          _previousResponseId = chunk.responseId;
+          await _savePrefs();
         }
-      });
+        if (chunk.delta != null && chunk.delta!.isNotEmpty) {
+          setState(() {
+            _messages.last.text += chunk.delta!;
+          });
+        }
+        if (chunk.done) {
+          break;
+        }
+      }
     } catch (e) {
       setState(() {
-        _error = 'Query failed: $e';
+        _error = 'Send failed: $e';
       });
     } finally {
       setState(() {
-        _loading = false;
+        _sending = false;
       });
     }
   }
 
+  Future<void> _newChat() async {
+    setState(() {
+      _messages.clear();
+      _previousResponseId = null;
+      _error = null;
+    });
+    await _savePrefs();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final responseText = _response == null
-        ? 'No response yet.'
-        : _response!.isEmpty
-            ? 'Empty response.'
-            : _hexDump(_response!);
-    final root = _rootController.text.trim();
-    final server = _serverController.text.trim();
-    final maxInfo = root.isEmpty
-        ? 'Max request: n/a | Max response: n/a'
-        : _maxInfo(root, server);
-
+    final maxInfo = _maxInfo();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DNS Byte Echo'),
+        title: const Text('DNS Chat'),
+        actions: [
+          TextButton(
+            onPressed: _sending ? null : _newChat,
+            child: const Text('New chat'),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            TextField(
+              controller: _apiKeyController,
+              decoration: const InputDecoration(
+                labelText: 'OpenAI API key (stored locally)',
+                border: OutlineInputBorder(),
+              ),
+              obscureText: true,
+              onChanged: (_) => _savePrefs(),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _rootController,
               decoration: const InputDecoration(
-                labelText: 'Root domain (e.g. ns.aqnichol.com)',
+                labelText: 'Root domain (delegated)',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -150,46 +212,15 @@ class _DnsHomeState extends State<DnsHome> {
             ),
             const SizedBox(height: 8),
             if (_detectedServers.isNotEmpty)
-              Text('Detected DNS: ${_detectedServers.join(', ')}'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _sendController,
-              decoration: const InputDecoration(
-                labelText: 'Text to send',
-                border: OutlineInputBorder(),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Detected DNS: ${_detectedServers.join(', ')}'),
               ),
-              maxLines: 3,
-            ),
             const SizedBox(height: 8),
-            Text(maxInfo),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: _loading ? null : _runQuery,
-              child: _loading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Get'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(maxInfo),
             ),
-            const SizedBox(height: 12),
-            if (_error != null)
-              Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            const SizedBox(height: 12),
-            if (_responseText != null)
-              TextField(
-                controller: TextEditingController(text: _responseText!),
-                readOnly: true,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Received text',
-                  border: OutlineInputBorder(),
-                ),
-              ),
             const SizedBox(height: 12),
             Expanded(
               child: Container(
@@ -197,39 +228,83 @@ class _DnsHomeState extends State<DnsHome> {
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.shade300),
                   borderRadius: BorderRadius.circular(8),
-                  color: Colors.grey.shade50,
                 ),
-                child: SingleChildScrollView(
-                  child: Text(
-                    responseText,
-                    style: const TextStyle(fontFamily: 'Menlo'),
-                  ),
+                child: ListView.builder(
+                  itemCount: _messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = _messages[index];
+                    final isUser = msg.role == 'user';
+                    return Align(
+                      alignment:
+                          isUser ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isUser
+                              ? Colors.indigo.shade50
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(msg.text),
+                      ),
+                    );
+                  },
                 ),
               ),
+            ),
+            const SizedBox(height: 12),
+            if (_error != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    decoration: const InputDecoration(
+                      labelText: 'Message',
+                      border: OutlineInputBorder(),
+                    ),
+                    minLines: 1,
+                    maxLines: 4,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _sending ? null : _sendMessage,
+                  child: _sending
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Send'),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
-}
 
-String _maxInfo(String root, String server) {
-  final client = EncryptedDnsClient(
-      rootDomain: root, server: server.isEmpty ? '1.1.1.1:53' : server);
-  return 'Max request: ${client.maxPlaintextRequestSize} bytes | '
-      'Max response: ${client.maxPlaintextResponseSize} bytes';
-}
-
-String _hexDump(Uint8List data) {
-  final buffer = StringBuffer();
-  for (var i = 0; i < data.length; i++) {
-    final byte = data[i];
-    final hex = byte.toRadixString(16).padLeft(2, '0');
-    buffer.write(hex);
-    if (i != data.length - 1) {
-      buffer.write(' ');
+  String _maxInfo() {
+    final root = _rootController.text.trim();
+    final server = _serverController.text.trim();
+    if (root.isEmpty) {
+      return 'Max request: n/a | Max response: n/a';
     }
+    final chosenServer =
+        server.isEmpty ? '1.1.1.1:53' : server;
+    final client = DnsChatClient(rootDomain: root, server: chosenServer);
+    return 'Max request: ${client.maxRequestBytes} bytes | '
+        'Max response: ${client.maxResponseBytes} bytes';
   }
-  return buffer.toString();
 }

@@ -540,76 +540,89 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(chat.title)),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              itemCount: chat.messages.length,
-              itemBuilder: (context, index) {
-                final msg = chat.messages[index];
-                final isUser = msg.role == 'user';
-                return Align(
-                  alignment:
-                      isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isUser
-                          ? Colors.indigo.shade50
-                          : Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(msg.text),
-                  ),
-                );
-              },
-            ),
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(chat);
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(chat.title),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(chat),
           ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: ListView.builder(
+                controller: _scrollController,
+                itemCount: chat.messages.length,
+                itemBuilder: (context, index) {
+                  final msg = chat.messages[index];
+                  final isUser = msg.role == 'user';
+                  return Align(
+                    alignment:
+                        isUser ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      margin:
+                          const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isUser
+                            ? Colors.indigo.shade50
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(msg.text),
+                    ),
+                  );
+                },
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    decoration: const InputDecoration(
-                      labelText: 'Message',
-                      border: OutlineInputBorder(),
-                    ),
-                    minLines: 1,
-                    maxLines: 4,
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _error!,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _sending ? null : _send,
-                  child: _sending
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Send'),
-                ),
-              ],
+              ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _inputController,
+                      decoration: const InputDecoration(
+                        labelText: 'Message',
+                        border: OutlineInputBorder(),
+                      ),
+                      minLines: 1,
+                      maxLines: 4,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: _sending ? null : _send,
+                    child: _sending
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Send'),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

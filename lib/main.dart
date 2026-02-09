@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import 'dns_ffi.dart';
 import 'dns_server.dart';
+import 'secure_channel.dart';
 
 void main() {
   runApp(const DnsApp());
@@ -34,7 +34,7 @@ class DnsHome extends StatefulWidget {
 }
 
 class _DnsHomeState extends State<DnsHome> {
-  final _rootController = TextEditingController(text: 'ns.aqnichol.com');
+  final _rootController = TextEditingController(text: 't.aqnichol.com');
   final _serverController = TextEditingController();
   final _sendController = TextEditingController(text: 'hello');
   Uint8List? _response;
@@ -87,7 +87,8 @@ class _DnsHomeState extends State<DnsHome> {
       final chosenServer = server.isEmpty
           ? (_detectedServers.isNotEmpty ? '${_detectedServers.first}:53' : '1.1.1.1:53')
           : server;
-      final client = DnsByteClient(rootDomain: root, server: chosenServer);
+      final client =
+          EncryptedDnsClient(rootDomain: root, server: chosenServer);
       final payload = Uint8List.fromList(utf8.encode(text));
       final bytes = await client.send(payload);
       setState(() {
@@ -213,10 +214,10 @@ class _DnsHomeState extends State<DnsHome> {
 }
 
 String _maxInfo(String root, String server) {
-  final client = DnsByteClient(
+  final client = EncryptedDnsClient(
       rootDomain: root, server: server.isEmpty ? '1.1.1.1:53' : server);
-  return 'Max request: ${client.maxRequestSize} bytes | '
-      'Max response: ${client.maxResponseSize} bytes';
+  return 'Max request: ${client.maxPlaintextRequestSize} bytes | '
+      'Max response: ${client.maxPlaintextResponseSize} bytes';
 }
 
 String _hexDump(Uint8List data) {

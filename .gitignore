@@ -39,3 +39,8 @@ windows/flutter/ephemeral/
 
 # OS
 .DS_Store
+
+# Key material
+keys/
+*.pem
+*.key

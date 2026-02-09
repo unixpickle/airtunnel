@@ -46,12 +46,21 @@ func main() {
 	maxReq := maxRequestSize(root)
 	maxResp := maxResponseSize()
 	log.Printf("root=%s max_request_bytes=%d max_response_bytes=%d", root, maxReq, maxResp)
-	log.Printf("max_plaintext_request_bytes=%d", maxReq-(sessionIDSize+nonceSize+16))
-	log.Printf("max_plaintext_response_bytes=%d", maxResp-(sessionIDSize+nonceSize+16))
-	log.Printf("max_request_total_bytes=%d", maxReq*128)
+	maxPlainReq := maxReq - (sessionIDSize + nonceSize + 16)
+	maxPlainResp := maxResp - (sessionIDSize + nonceSize + 16)
+	if maxPlainReq < 0 {
+		maxPlainReq = 0
+	}
+	if maxPlainResp < 0 {
+		maxPlainResp = 0
+	}
+	log.Printf("max_plaintext_request_bytes=%d", maxPlainReq)
+	log.Printf("max_plaintext_response_bytes=%d", maxPlainResp)
+	log.Printf("max_request_total_bytes=%d", maxPlainReq*128)
+	log.Printf("app_response_chunk_bytes=%d", maxPlainResp-(1+msgIDSize+4+1))
 
 	sessions := NewSessionStore()
-	app := NewAppServer(maxReq, maxResp)
+	app := NewAppServer(maxPlainReq, maxPlainResp)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 		handleRequest(w, r, root, priv, sessions, app, maxReq, maxResp)

@@ -99,6 +99,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	offset := readU32(payload, 1+msgIDSize)
 	total := readU32(payload, 1+msgIDSize+4)
 	data := payload[headerChunkSize:]
+	log.Printf("app: chunk offset=%d len=%d total=%d", offset, len(data), total)
 
 	if int(total) > a.maxTotal {
 		log.Printf("app: request too large total=%d max=%d", total, a.maxTotal)
@@ -150,9 +151,14 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	a.cleanupExpired()
 	a.mu.Lock()
 	resp := a.responses[a.scopedKey(sessionID, msgID)]
+	upload := a.uploads[a.scopedKey(sessionID, msgID)]
 	a.mu.Unlock()
 	if resp == nil {
-		log.Printf("app: poll unknown msg_id (pending)")
+		if upload != nil {
+			log.Printf("app: poll pending upload total=%d chunks=%d", upload.Total, len(upload.Chunks))
+		} else {
+			log.Printf("app: poll unknown msg_id (pending)")
+		}
 		return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 	}
 

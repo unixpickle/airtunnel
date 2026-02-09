@@ -64,6 +64,7 @@ class DnsChatClient {
     final errorBuffer = StringBuffer();
     var sawError = false;
     var sawDelta = false;
+    final startTime = DateTime.now();
     const backoff = [
       Duration(milliseconds: 500),
       Duration(seconds: 2),
@@ -80,6 +81,9 @@ class DnsChatClient {
         continue;
       }
       if (response is _PollPending) {
+        if (DateTime.now().difference(startTime) > const Duration(seconds: 90)) {
+          throw StateError('Timed out waiting for response.');
+        }
         await Future.delayed(backoff[backoffIndex]);
         if (backoffIndex < backoff.length - 1) {
           backoffIndex++;

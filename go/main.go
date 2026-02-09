@@ -189,6 +189,12 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 		return nil, false
 	}
 
+	if len(plaintext) > 0 {
+		log.Printf("app: decrypted type=%d len=%d", plaintext[0], len(plaintext))
+	} else {
+		log.Printf("app: decrypted empty payload")
+	}
+
 	respPayload, err := app.Handle(id, plaintext)
 	if err != nil {
 		return nil, false

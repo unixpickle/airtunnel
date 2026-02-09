@@ -158,6 +158,9 @@ class DnsChatClient {
       Uint8List msgId, int offset, int total, Uint8List chunk) async {
     const retries = 3;
     for (var attempt = 0; attempt < retries; attempt++) {
+      // Debug: track outgoing chunks and retries.
+      // ignore: avoid_print
+      print('send chunk offset=$offset len=${chunk.length} total=$total attempt=${attempt + 1}');
       final payload = _buildChunk(msgId, offset, total, chunk);
       Uint8List resp;
       try {
@@ -173,6 +176,8 @@ class DnsChatClient {
       }
       final parsed = _parseResponse(resp);
       if (parsed is _Ack && parsed.offset == offset) {
+        // ignore: avoid_print
+        print('ack offset=$offset');
         return;
       }
       if (parsed is _ErrorResp) {

@@ -25,7 +25,7 @@ func main() {
 	var root string
 	var addr string
 	var keyPath string
-	flag.StringVar(&root, "root", "", "root domain (e.g. t.aqnichol.com)")
+	flag.StringVar(&root, "root", "", "root domain (e.g. someserver.google.com)")
 	flag.StringVar(&addr, "addr", ":5353", "listen address")
 	flag.StringVar(&keyPath, "key", "", "ed25519 private key PEM")
 	flag.Parse()

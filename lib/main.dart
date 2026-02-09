@@ -34,7 +34,8 @@ class DnsHome extends StatefulWidget {
 }
 
 class _DnsHomeState extends State<DnsHome> {
-  final _rootController = TextEditingController(text: 't.aqnichol.com');
+  final _rootController =
+      TextEditingController(text: 'someserver.google.com');
   final _serverController = TextEditingController();
   final _sendController = TextEditingController(text: 'hello');
   Uint8List? _response;

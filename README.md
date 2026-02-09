@@ -54,7 +54,7 @@ DNS server auto-detection:
 - Linux: `/etc/resolv.conf`.
 
 The UI lets you set:
-- Root domain (delegated zone like `t.aqnichol.com`).
+- Root domain (delegated zone like `someserver.google.com`).
 - DNS server (auto-filled if detected).
 - Text to send.
 
@@ -78,7 +78,7 @@ cd /Users/alex/code/github.com/unixpickle/airtunnel/go
 
 go mod tidy
 
-go run . -root t.aqnichol.com -addr :5353 -key ../keys/server_private.pem
+go run . -root someserver.google.com -addr :5353 -key ../keys/server_private.pem
 ```
 
 Flags:

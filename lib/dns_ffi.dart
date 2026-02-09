@@ -119,6 +119,11 @@ Uint8List _decodeResponse(Uint8List data, String expectedName) {
     throw FormatException('DNS response too short');
   }
 
+  final rcode = data[3] & 0x0f;
+  if (rcode != 0) {
+    throw StateError('DNS error: ${_rcodeName(rcode)} (rcode=$rcode)');
+  }
+
   final qdCount = (data[4] << 8) | data[5];
   final anCount = (data[6] << 8) | data[7];
   var offset = 12;
@@ -152,7 +157,25 @@ Uint8List _decodeResponse(Uint8List data, String expectedName) {
     offset += rdLength;
   }
 
-  throw StateError('No TXT response');
+  throw StateError(
+      'No TXT response (qd=$qdCount an=$anCount name=$expectedName)');
+}
+
+String _rcodeName(int rcode) {
+  switch (rcode) {
+    case 1:
+      return 'FORMERR';
+    case 2:
+      return 'SERVFAIL';
+    case 3:
+      return 'NXDOMAIN';
+    case 4:
+      return 'NOTIMP';
+    case 5:
+      return 'REFUSED';
+    default:
+      return 'UNKNOWN';
+  }
 }
 
 String _parseTxt(Uint8List rdata) {

@@ -151,7 +151,15 @@ class DnsChatClient {
     const retries = 3;
     for (var attempt = 0; attempt < retries; attempt++) {
       final payload = _buildChunk(msgId, offset, total, chunk);
-      final resp = await _channel.send(payload);
+      Uint8List resp;
+      try {
+        resp = await _channel.send(payload);
+      } catch (e) {
+        if (_isServFail(e)) {
+          continue;
+        }
+        rethrow;
+      }
       if (resp.isEmpty) {
         continue;
       }
@@ -181,7 +189,15 @@ class DnsChatClient {
     buffer.addByte(_typePoll);
     buffer.add(msgId);
     buffer.add(_u32(nextOffset));
-    final resp = await _channel.send(buffer.takeBytes());
+    Uint8List resp;
+    try {
+      resp = await _channel.send(buffer.takeBytes());
+    } catch (e) {
+      if (_isServFail(e)) {
+        return _PollPending();
+      }
+      rethrow;
+    }
     if (resp.isEmpty) {
       return _PollPending();
     }
@@ -329,4 +345,9 @@ int _clampMax(int value) {
     return 0;
   }
   return value;
+}
+
+bool _isServFail(Object e) {
+  final msg = e.toString();
+  return msg.contains('SERVFAIL') || msg.contains('rcode=2');
 }

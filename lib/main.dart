@@ -143,6 +143,16 @@ class _RootScreenState extends State<RootScreen> {
     await prefs.setString(_prefsApiKey, settings.apiKey);
     await prefs.setString(_prefsRoot, settings.rootDomain);
     await prefs.setString(_prefsServer, settings.server);
+    final prev = _settings;
+    final resetConversation = prev != null &&
+        (prev.apiKey != settings.apiKey ||
+            prev.rootDomain != settings.rootDomain);
+    if (resetConversation) {
+      for (final chat in _chats) {
+        chat.previousResponseId = null;
+      }
+      await _saveChats();
+    }
     setState(() {
       _settings = settings;
     });
@@ -516,9 +526,17 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('previous response with id')) {
+        setState(() {
+          chat.previousResponseId = null;
+          _error = 'Conversation expired. Start a new chat or resend.';
+        });
+      } else {
       setState(() {
         _error = 'Send failed: $e';
       });
+      }
     } finally {
       setState(() {
         _sending = false;

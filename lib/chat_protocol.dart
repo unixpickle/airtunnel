@@ -128,8 +128,10 @@ class DnsChatClient {
       'api_key': apiKey,
       'model': model,
       'message': message,
-      'previous_response_id': previousResponseId,
     };
+    if (previousResponseId != null && previousResponseId.isNotEmpty) {
+      payload['previous_response_id'] = previousResponseId;
+    }
     final jsonStr = jsonEncode(payload);
     return Uint8List.fromList(utf8.encode(jsonStr));
   }

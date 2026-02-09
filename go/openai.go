@@ -29,6 +29,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			},
 		},
 		"stream": true,
+		"store":  true,
 	}
 	if req.PreviousResponseID != "" {
 		body["previous_response_id"] = req.PreviousResponseID

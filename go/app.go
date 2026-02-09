@@ -161,8 +161,16 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 	if int(nextOffset) < len(resp.Buffer) {
 		log.Printf("app: sending chunk offset=%d total=%d done=%v", nextOffset, len(resp.Buffer), resp.Done)
 		end := len(resp.Buffer)
-		if a.respChunk > 0 && int(nextOffset)+a.respChunk < end {
-			end = int(nextOffset) + a.respChunk
+		chunkMax := a.respChunk
+		hardMax := a.maxResp - headerRespSize
+		if hardMax < 0 {
+			hardMax = 0
+		}
+		if chunkMax <= 0 || chunkMax > hardMax {
+			chunkMax = hardMax
+		}
+		if chunkMax > 0 && int(nextOffset)+chunkMax < end {
+			end = int(nextOffset) + chunkMax
 		}
 		data := resp.Buffer[int(nextOffset):end]
 		done := resp.Done && end == len(resp.Buffer)
@@ -252,6 +260,13 @@ func (a *AppServer) ackResp(msgID []byte, offset uint32) []byte {
 }
 
 func (a *AppServer) responseResp(msgID []byte, offset uint32, data []byte, done bool, pending bool, isError bool) []byte {
+	maxData := a.maxResp - headerRespSize
+	if maxData < 0 {
+		maxData = 0
+	}
+	if len(data) > maxData {
+		data = data[:maxData]
+	}
 	b := make([]byte, 1+msgIDSize+4+1+len(data))
 	b[0] = appTypeResp
 	copy(b[1:], msgID)

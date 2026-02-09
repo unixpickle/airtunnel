@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/base32"
 	"strings"
+
+	"github.com/miekg/dns"
 )
 
 var base32Encoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
@@ -55,4 +57,33 @@ func maxRequestSize(root string) int {
 
 func maxResponseSize() int {
 	return maxBytesForChars(255)
+}
+
+func decodeQuestion(root string, q dns.Question) ([]byte, bool) {
+	name := strings.ToLower(q.Name)
+	root = strings.ToLower(root)
+	if !strings.HasSuffix(name, root) {
+		return nil, false
+	}
+
+	prefix := strings.TrimSuffix(name, root)
+	prefix = strings.TrimSuffix(prefix, ".")
+	if prefix == "" {
+		return []byte{}, true
+	}
+
+	labels := strings.Split(prefix, ".")
+	var b strings.Builder
+	for _, label := range labels {
+		if label == "" {
+			return nil, false
+		}
+		b.WriteString(label)
+	}
+
+	payload, err := decodeBase32(b.String())
+	if err != nil {
+		return nil, false
+	}
+	return payload, true
 }

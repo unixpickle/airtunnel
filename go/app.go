@@ -208,6 +208,10 @@ func (a *AppServer) processRequest(msgID []byte, data []byte) {
 		if event.Error != "" {
 			state.ErrorMsg = event.Error
 			state.Done = true
+			state.IsError = true
+			if len(state.Buffer) == 0 {
+				state.Buffer = []byte(event.Error)
+			}
 		}
 		if event.Done {
 			state.Done = true

@@ -50,8 +50,8 @@ cd /Users/alex/code/github.com/unixpickle/airtunnel
 
 DNS server auto-detection:
 - Android: `ConnectivityManager` + `LinkProperties`.
-- iOS/macOS: Network framework (`NWPathMonitor`).
-- Linux: `/etc/resolv.conf`.
+- iOS: Network framework (`NWPathMonitor`).
+- macOS/Linux: `/etc/resolv.conf`.
 
 The UI lets you set:
 - Root domain (delegated zone like `someserver.google.com`).

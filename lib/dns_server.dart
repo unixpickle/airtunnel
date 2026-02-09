@@ -7,7 +7,7 @@ class DnsServerResolver {
   static const _channel = MethodChannel('dns_server');
 
   Future<List<String>> getServers() async {
-    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+    if (Platform.isAndroid || Platform.isIOS) {
       final result = await _channel.invokeMethod<List<dynamic>>('getDnsServers');
       if (result == null) {
         return const [];
@@ -15,7 +15,7 @@ class DnsServerResolver {
       return result.map((e) => e.toString()).where((e) => e.isNotEmpty).toList();
     }
 
-    if (Platform.isLinux) {
+    if (Platform.isLinux || Platform.isMacOS) {
       return _parseResolvConf();
     }
 

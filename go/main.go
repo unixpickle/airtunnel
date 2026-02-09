@@ -189,7 +189,7 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 		return nil, false
 	}
 
-	respPayload, err := app.Handle(plaintext)
+	respPayload, err := app.Handle(id, plaintext)
 	if err != nil {
 		return nil, false
 	}

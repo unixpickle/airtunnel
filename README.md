@@ -45,6 +45,7 @@ an ECDH-based handshake.
 ### Chat protocol (inside encrypted payloads)
 - Upload chunk: `type=0x01 | msg_id(8) | offset(4) | total_len(4) | data`
 - Poll: `type=0x02 | msg_id(8) | next_offset(4)`
+- Done ack: `type=0x03 | msg_id(8)`
 - Ack: `type=0x81 | msg_id(8) | offset(4)`
 - Response chunk: `type=0x82 | msg_id(8) | offset(4) | flags(1) | data`
   - `flags`: bit0=done, bit1=pending, bit2=error

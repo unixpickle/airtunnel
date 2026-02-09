@@ -12,6 +12,7 @@ import (
 const (
 	appTypeChunk    = 0x01
 	appTypePoll     = 0x02
+	appTypeDone     = 0x03
 	appTypeAck      = 0x81
 	appTypeResp     = 0x82
 	appTypeError    = 0x83
@@ -32,6 +33,7 @@ type AppServer struct {
 	maxTotal   int
 	maxResp    int
 	respChunk  int
+	ttl        time.Duration
 }
 
 type UploadState struct {
@@ -69,24 +71,27 @@ func NewAppServer(maxReqSize, maxRespSize int) *AppServer {
 		maxTotal:   maxReqSize * 128,
 		maxResp:    maxRespSize,
 		respChunk:  respChunk,
+		ttl:        10 * time.Minute,
 	}
 }
 
-func (a *AppServer) Handle(payload []byte) ([]byte, error) {
+func (a *AppServer) Handle(sessionID []byte, payload []byte) ([]byte, error) {
 	if len(payload) < 1 {
 		return nil, errors.New("empty payload")
 	}
 	switch payload[0] {
 	case appTypeChunk:
-		return a.handleChunk(payload)
+		return a.handleChunk(sessionID, payload)
 	case appTypePoll:
-		return a.handlePoll(payload)
+		return a.handlePoll(sessionID, payload)
+	case appTypeDone:
+		return a.handleDone(sessionID, payload)
 	default:
 		return a.errorResp(nil, "unknown message type"), nil
 	}
 }
 
-func (a *AppServer) handleChunk(payload []byte) ([]byte, error) {
+func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error) {
 	if len(payload) < headerChunkSize {
 		return a.errorResp(nil, "malformed chunk"), nil
 	}
@@ -104,7 +109,7 @@ func (a *AppServer) handleChunk(payload []byte) ([]byte, error) {
 		return a.errorResp(msgID, "chunk out of range"), nil
 	}
 
-	key := string(msgID)
+	key := a.scopedKey(sessionID, msgID)
 	var completeData []byte
 
 	a.mu.Lock()
@@ -130,20 +135,21 @@ func (a *AppServer) handleChunk(payload []byte) ([]byte, error) {
 
 	if completeData != nil {
 		log.Printf("app: received full request total=%d", len(completeData))
-		go a.processRequest(msgID, completeData)
+		go a.processRequest(sessionID, msgID, completeData)
 	}
 	return a.ackResp(msgID, offset), nil
 }
 
-func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
+func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error) {
 	if len(payload) < 1+msgIDSize+4 {
 		return a.errorResp(nil, "malformed poll"), nil
 	}
 	msgID := payload[1 : 1+msgIDSize]
 	nextOffset := readU32(payload, 1+msgIDSize)
 
+	a.cleanupExpired()
 	a.mu.Lock()
-	resp := a.responses[string(msgID)]
+	resp := a.responses[a.scopedKey(sessionID, msgID)]
 	a.mu.Unlock()
 	if resp == nil {
 		log.Printf("app: poll unknown msg_id")
@@ -183,16 +189,29 @@ func (a *AppServer) handlePoll(payload []byte) ([]byte, error) {
 	return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 }
 
-func (a *AppServer) processRequest(msgID []byte, data []byte) {
+func (a *AppServer) handleDone(sessionID []byte, payload []byte) ([]byte, error) {
+	if len(payload) < 1+msgIDSize {
+		return a.errorResp(nil, "malformed done"), nil
+	}
+	msgID := payload[1 : 1+msgIDSize]
+	key := a.scopedKey(sessionID, msgID)
+	a.mu.Lock()
+	delete(a.responses, key)
+	delete(a.uploads, key)
+	a.mu.Unlock()
+	return a.ackResp(msgID, 0), nil
+}
+
+func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) {
 	var req ChatRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		log.Printf("app: invalid request json: %v", err)
-		a.setResponseError(msgID, "invalid request")
+		a.setResponseError(sessionID, msgID, "invalid request")
 		return
 	}
 	if req.APIKey == "" || req.Message == "" {
 		log.Printf("app: missing api_key or message")
-		a.setResponseError(msgID, "missing api_key or message")
+		a.setResponseError(sessionID, msgID, "missing api_key or message")
 		return
 	}
 	if req.Model == "" {
@@ -201,7 +220,7 @@ func (a *AppServer) processRequest(msgID []byte, data []byte) {
 
 	state := &ResponseState{}
 	a.mu.Lock()
-	a.responses[string(msgID)] = state
+	a.responses[a.scopedKey(sessionID, msgID)] = state
 	a.mu.Unlock()
 
 	err := streamOpenAI(req, func(event StreamEvent) {
@@ -227,18 +246,18 @@ func (a *AppServer) processRequest(msgID []byte, data []byte) {
 	})
 	if err != nil {
 		log.Printf("openai stream error: %v", err)
-		a.setResponseError(msgID, err.Error())
+		a.setResponseError(sessionID, msgID, err.Error())
 	}
 }
 
-func (a *AppServer) setResponseError(msgID []byte, msg string) {
+func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string) {
 	a.mu.Lock()
-	state := a.responses[string(msgID)]
+	state := a.responses[a.scopedKey(sessionID, msgID)]
 	a.mu.Unlock()
 	if state == nil {
 		state = &ResponseState{}
 		a.mu.Lock()
-		a.responses[string(msgID)] = state
+		a.responses[a.scopedKey(sessionID, msgID)] = state
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
@@ -306,6 +325,29 @@ func (a *AppServer) errorResp(msgID []byte, msg string) []byte {
 	b[1+msgIDSize] = 1
 	copy(b[1+msgIDSize+1:], msgBytes)
 	return b
+}
+
+func (a *AppServer) scopedKey(sessionID []byte, msgID []byte) string {
+	b := make([]byte, 0, len(sessionID)+len(msgID))
+	b = append(b, sessionID...)
+	b = append(b, msgID...)
+	return string(b)
+}
+
+func (a *AppServer) cleanupExpired() {
+	now := time.Now()
+	a.mu.Lock()
+	for k, v := range a.uploads {
+		if now.Sub(v.Updated) > a.ttl {
+			delete(a.uploads, k)
+		}
+	}
+	for k, v := range a.responses {
+		if v.Done && v.MetaSent {
+			delete(a.responses, k)
+		}
+	}
+	a.mu.Unlock()
 }
 
 func (a *AppServer) truncateError(msg string) string {

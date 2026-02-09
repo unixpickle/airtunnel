@@ -22,6 +22,7 @@ class DnsChatClient {
 
   static const int _typeChunk = 0x01;
   static const int _typePoll = 0x02;
+  static const int _typeDone = 0x03;
 
   static const int _typeAck = 0x81;
   static const int _typeRespChunk = 0x82;
@@ -109,6 +110,7 @@ class DnsChatClient {
           if (!sawDelta) {
             throw StateError('No response text received.');
           }
+          await _sendDone(msgId);
           yield ChatChunk(done: true);
           break;
         }
@@ -182,6 +184,17 @@ class DnsChatClient {
     buffer.add(_u32(total));
     buffer.add(data);
     return buffer.takeBytes();
+  }
+
+  Future<void> _sendDone(Uint8List msgId) async {
+    final buffer = BytesBuilder();
+    buffer.addByte(_typeDone);
+    buffer.add(msgId);
+    try {
+      await _channel.send(buffer.takeBytes());
+    } catch (_) {
+      // Best-effort cleanup signal.
+    }
   }
 
   Future<_PollResult> _poll(Uint8List msgId, int nextOffset) async {

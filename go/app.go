@@ -152,8 +152,8 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	resp := a.responses[a.scopedKey(sessionID, msgID)]
 	a.mu.Unlock()
 	if resp == nil {
-		log.Printf("app: poll unknown msg_id")
-		return a.errorResp(msgID, "unknown message id"), nil
+		log.Printf("app: poll unknown msg_id (pending)")
+		return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 	}
 
 	resp.mu.Lock()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
 	"flag"
 	"log"
 	"strings"
@@ -190,9 +191,9 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 	}
 
 	if len(plaintext) > 0 {
-		log.Printf("app: decrypted type=%d len=%d", plaintext[0], len(plaintext))
+		log.Printf("app: decrypted type=%d len=%d session=%s", plaintext[0], len(plaintext), shortHex(id))
 	} else {
-		log.Printf("app: decrypted empty payload")
+		log.Printf("app: decrypted empty payload session=%s", shortHex(id))
 	}
 
 	respPayload, err := app.Handle(id, plaintext)
@@ -214,4 +215,15 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 	resp = append(resp, respNonce...)
 	resp = append(resp, respCipher...)
 	return resp, true
+}
+
+func shortHex(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	n := len(b)
+	if n > 4 {
+		n = 4
+	}
+	return hex.EncodeToString(b[:n])
 }

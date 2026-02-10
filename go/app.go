@@ -40,6 +40,7 @@ type UploadState struct {
 	Total   int
 	Chunks  map[uint32][]byte
 	Updated time.Time
+	Done    bool
 }
 
 type ResponseState struct {
@@ -114,10 +115,18 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	var completeData []byte
 
 	a.mu.Lock()
+	if _, exists := a.responses[key]; exists {
+		a.mu.Unlock()
+		return a.ackResp(msgID, offset), nil
+	}
 	state, ok := a.uploads[key]
 	if !ok {
 		state = &UploadState{Total: int(total), Chunks: make(map[uint32][]byte)}
 		a.uploads[key] = state
+	}
+	if state.Done {
+		a.mu.Unlock()
+		return a.ackResp(msgID, offset), nil
 	}
 	if state.Total != int(total) {
 		a.mu.Unlock()
@@ -130,7 +139,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
-		delete(a.uploads, key)
+		state.Done = true
 	}
 	a.mu.Unlock()
 

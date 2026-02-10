@@ -199,6 +199,31 @@ class _RootScreenState extends State<RootScreen> {
     }
   }
 
+  Future<void> _deleteChat(ChatSession chat) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete chat?'),
+        content: const Text('This will permanently delete the conversation.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      _chats.removeWhere((c) => c.id == chat.id);
+    });
+    await _saveChats();
+  }
+
   void _createChat() {
     final id = DateTime.now().millisecondsSinceEpoch.toString();
     final chat = ChatSession(id: id, title: 'New chat', messages: []);
@@ -251,6 +276,11 @@ class _RootScreenState extends State<RootScreen> {
                   title: Text(chat.title),
                   subtitle: Text('${chat.messages.length} messages'),
                   onTap: () => _openChat(chat),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'Delete',
+                    onPressed: () => _deleteChat(chat),
+                  ),
                 );
               },
             ),

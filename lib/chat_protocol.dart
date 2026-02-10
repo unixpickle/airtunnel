@@ -57,7 +57,7 @@ class DnsChatClient {
       message: message,
       previousResponseId: previousResponseId,
     );
-    await _sendChunked(msgId, request);
+    final chunks = await _sendChunked(msgId, request);
 
     var nextOffset = 0;
     var backoffIndex = 0;
@@ -65,6 +65,7 @@ class DnsChatClient {
     var sawError = false;
     var sawDelta = false;
     final startTime = DateTime.now();
+    var lastProgress = DateTime.now();
     const backoff = [
       Duration(milliseconds: 500),
       Duration(seconds: 2),
@@ -78,11 +79,16 @@ class DnsChatClient {
       }
       if (response is _PollMeta) {
         yield ChatChunk(responseId: response.responseId);
+        lastProgress = DateTime.now();
         continue;
       }
       if (response is _PollPending) {
         if (DateTime.now().difference(startTime) > const Duration(seconds: 90)) {
           throw StateError('Timed out waiting for response.');
+        }
+        if (DateTime.now().difference(lastProgress) > const Duration(seconds: 8)) {
+          await _resendChunks(msgId, chunks);
+          lastProgress = DateTime.now();
         }
         await Future.delayed(backoff[backoffIndex]);
         if (backoffIndex < backoff.length - 1) {
@@ -101,6 +107,7 @@ class DnsChatClient {
             yield ChatChunk(delta: text);
             if (text.isNotEmpty) {
               sawDelta = true;
+              lastProgress = DateTime.now();
             }
           }
         }
@@ -140,18 +147,21 @@ class DnsChatClient {
     return Uint8List.fromList(utf8.encode(jsonStr));
   }
 
-  Future<void> _sendChunked(Uint8List msgId, Uint8List data) async {
+  Future<List<_Chunk>> _sendChunked(Uint8List msgId, Uint8List data) async {
     final maxChunk = maxRequestBytes;
     if (maxChunk <= 0) {
       throw StateError('DNS channel too small for request header');
     }
     var offset = 0;
+    final chunks = <_Chunk>[];
     while (offset < data.length) {
       final end = (offset + maxChunk < data.length) ? offset + maxChunk : data.length;
       final chunk = data.sublist(offset, end);
       await _sendChunkWithRetry(msgId, offset, data.length, chunk);
+      chunks.add(_Chunk(offset, data.length, chunk));
       offset = end;
     }
+    return chunks;
   }
 
   Future<void> _sendChunkWithRetry(
@@ -205,6 +215,16 @@ class DnsChatClient {
       await _channel.send(buffer.takeBytes());
     } catch (_) {
       // Best-effort cleanup signal.
+    }
+  }
+
+  Future<void> _resendChunks(Uint8List msgId, List<_Chunk> chunks) async {
+    for (final chunk in chunks) {
+      try {
+        await _sendChunkWithRetry(msgId, chunk.offset, chunk.total, chunk.data);
+      } catch (_) {
+        // Best-effort resend.
+      }
     }
   }
 
@@ -323,6 +343,14 @@ class _PollChunk extends _PollResult {
   final Uint8List data;
   final bool done;
   final bool isError;
+}
+
+class _Chunk {
+  _Chunk(this.offset, this.total, this.data);
+
+  final int offset;
+  final int total;
+  final Uint8List data;
 }
 
 class _PollPending extends _PollResult {}

@@ -89,6 +89,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			id := extractResponseID(obj)
 			if id != "" {
 				log.Printf("openai: response created id=%s", id)
+				onEvent(StreamEvent{ResponseID: id})
 			}
 		case "response.output_text.delta":
 			delta := extractDelta(obj)

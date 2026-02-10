@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/heap"
 	"sync"
 	"time"
 )
@@ -9,27 +8,28 @@ import (
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*sessionEntry
-	expHeap  sessionHeap
+	tracker  *LRUTracker[*sessionEntry]
 	ttl      time.Duration
 }
 
 type sessionEntry struct {
+	id       string
 	key      []byte
 	lastUsed time.Time
-	item     *sessionHeapItem
 }
 
-type sessionHeap []*sessionHeapItem
+func (s *sessionEntry) LastUsed() time.Time {
+	return s.lastUsed
+}
 
-type sessionHeapItem struct {
-	id       string
-	lastUsed time.Time
-	index    int
+func (s *sessionEntry) id() string {
+	return s.id
 }
 
 func NewSessionStore(ttl time.Duration) *SessionStore {
 	return &SessionStore{
 		sessions: make(map[string]*sessionEntry),
+		tracker:  NewLRUTracker[*sessionEntry](),
 		ttl:      ttl,
 	}
 }
@@ -43,10 +43,7 @@ func (s *SessionStore) Get(id []byte) ([]byte, bool) {
 		return nil, false
 	}
 	entry.lastUsed = time.Now()
-	if entry.item != nil {
-		entry.item.lastUsed = entry.lastUsed
-		heap.Fix(&s.expHeap, entry.item.index)
-	}
+	s.tracker.PushOrUpdate(entry)
 	return entry.key, true
 }
 
@@ -57,56 +54,28 @@ func (s *SessionStore) Put(id []byte, key []byte) {
 	idStr := string(id)
 	entry, ok := s.sessions[idStr]
 	if !ok {
-		item := &sessionHeapItem{id: idStr, lastUsed: now}
-		entry = &sessionEntry{key: key, lastUsed: now, item: item}
+		entry = &sessionEntry{id: idStr, key: key, lastUsed: now}
 		s.sessions[idStr] = entry
-		heap.Push(&s.expHeap, item)
+		s.tracker.PushOrUpdate(entry)
 		return
 	}
 	entry.key = key
 	entry.lastUsed = now
-	if entry.item != nil {
-		entry.item.lastUsed = now
-		heap.Fix(&s.expHeap, entry.item.index)
-	}
+	s.tracker.PushOrUpdate(entry)
 }
 
 func (s *SessionStore) Prune(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for s.expHeap.Len() > 0 {
-		item := s.expHeap[0]
-		if now.Sub(item.lastUsed) <= s.ttl {
+	for {
+		entry, ok := s.tracker.PeekLastUsed()
+		if !ok {
 			break
 		}
-		delete(s.sessions, item.id)
-		heap.Pop(&s.expHeap)
+		if now.Sub(entry.lastUsed) <= s.ttl {
+			break
+		}
+		s.tracker.PopLastUsed()
+		delete(s.sessions, entry.id())
 	}
-}
-
-func (h sessionHeap) Len() int { return len(h) }
-
-func (h sessionHeap) Less(i, j int) bool {
-	return h[i].lastUsed.Before(h[j].lastUsed)
-}
-
-func (h sessionHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
-}
-
-func (h *sessionHeap) Push(x any) {
-	item := x.(*sessionHeapItem)
-	item.index = len(*h)
-	*h = append(*h, item)
-}
-
-func (h *sessionHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	item.index = -1
-	*h = old[:n-1]
-	return item
 }

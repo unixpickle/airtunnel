@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/heap"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,8 +31,8 @@ type AppServer struct {
 	mu         sync.Mutex
 	uploads    map[string]*UploadState
 	responses  map[string]*ResponseState
-	uploadHeap uploadHeap
-	respHeap   respHeap
+	uploadLRU  *LRUTracker[*UploadState]
+	respLRU    *LRUTracker[*ResponseState]
 	maxReqSize int
 	maxTotal   int
 	maxResp    int
@@ -42,16 +41,17 @@ type AppServer struct {
 }
 
 type UploadState struct {
+	key        string
 	Total      int
 	Chunks     map[uint32][]byte
 	Updated    time.Time
 	Done       bool
 	Processing bool
-	item       *uploadHeapItem
 }
 
 type ResponseState struct {
 	mu         sync.Mutex
+	key        string
 	Buffer     []byte
 	Done       bool
 	ResponseID string
@@ -59,21 +59,14 @@ type ResponseState struct {
 	IsError    bool
 	MetaSent   bool
 	Updated    time.Time
-	item       *respHeapItem
 }
 
-type uploadHeap []*uploadHeapItem
-type uploadHeapItem struct {
-	key     string
-	updated time.Time
-	index   int
+func (u *UploadState) LastUsed() time.Time {
+	return u.Updated
 }
 
-type respHeap []*respHeapItem
-type respHeapItem struct {
-	key     string
-	updated time.Time
-	index   int
+func (r *ResponseState) LastUsed() time.Time {
+	return r.Updated
 }
 
 type ChatRequest struct {
@@ -91,6 +84,8 @@ func NewAppServer(maxReqSize, maxRespSize int) *AppServer {
 	return &AppServer{
 		uploads:    make(map[string]*UploadState),
 		responses:  make(map[string]*ResponseState),
+		uploadLRU:  NewLRUTracker[*UploadState](),
+		respLRU:    NewLRUTracker[*ResponseState](),
 		maxReqSize: maxReqSize,
 		maxTotal:   maxReqSize * 128,
 		maxResp:    maxRespSize,
@@ -149,7 +144,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	}
 	state, ok := a.uploads[key]
 	if !ok {
-		state = &UploadState{Total: int(total), Chunks: make(map[uint32][]byte)}
+		state = &UploadState{key: key, Total: int(total), Chunks: make(map[uint32][]byte)}
 		a.uploads[key] = state
 	}
 	if state.Done {
@@ -163,7 +158,8 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	if _, exists := state.Chunks[offset]; !exists {
 		state.Chunks[offset] = append([]byte{}, data...)
 	}
-	a.touchUploadLocked(key, state)
+	state.Updated = time.Now()
+	a.uploadLRU.PushOrUpdate(state)
 
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
@@ -291,17 +287,19 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		req.Model = "gpt-4o-mini"
 	}
 
-	state := &ResponseState{}
 	key := a.scopedKey(sessionID, msgID)
+	state := &ResponseState{key: key, Updated: time.Now()}
 	a.mu.Lock()
 	a.responses[key] = state
+	a.respLRU.PushOrUpdate(state)
 	a.mu.Unlock()
 
 	err := streamOpenAI(req, func(event StreamEvent) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+		state.Updated = time.Now()
 		a.mu.Lock()
-		a.touchRespLocked(key, state)
+		a.respLRU.PushOrUpdate(state)
 		a.mu.Unlock()
 		if event.ResponseID != "" {
 			state.ResponseID = event.ResponseID
@@ -333,14 +331,16 @@ func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string)
 	state := a.responses[key]
 	a.mu.Unlock()
 	if state == nil {
-		state = &ResponseState{}
+		state = &ResponseState{key: key, Updated: time.Now()}
 		a.mu.Lock()
 		a.responses[key] = state
+		a.respLRU.PushOrUpdate(state)
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
+	state.Updated = time.Now()
 	a.mu.Lock()
-	a.touchRespLocked(key, state)
+	a.respLRU.PushOrUpdate(state)
 	a.mu.Unlock()
 	state.ErrorMsg = msg
 	state.Done = true
@@ -415,94 +415,26 @@ func (a *AppServer) scopedKey(sessionID []byte, msgID []byte) string {
 	return string(b)
 }
 
-func (a *AppServer) touchUploadLocked(key string, state *UploadState) {
-	now := time.Now()
-	state.Updated = now
-	if state.item == nil {
-		item := &uploadHeapItem{key: key, updated: now}
-		state.item = item
-		heap.Push(&a.uploadHeap, item)
-		return
-	}
-	state.item.updated = now
-	heap.Fix(&a.uploadHeap, state.item.index)
-}
-
-func (a *AppServer) touchRespLocked(key string, state *ResponseState) {
-	now := time.Now()
-	state.Updated = now
-	if state.item == nil {
-		item := &respHeapItem{key: key, updated: now}
-		state.item = item
-		heap.Push(&a.respHeap, item)
-		return
-	}
-	state.item.updated = now
-	heap.Fix(&a.respHeap, state.item.index)
-}
-
 func (a *AppServer) cleanupExpired() {
 	now := time.Now()
 	a.mu.Lock()
-	for a.uploadHeap.Len() > 0 {
-		item := a.uploadHeap[0]
-		if now.Sub(item.updated) <= a.ttl {
+	for {
+		state, ok := a.uploadLRU.PeekLastUsed()
+		if !ok || now.Sub(state.Updated) <= a.ttl {
 			break
 		}
-		delete(a.uploads, item.key)
-		heap.Pop(&a.uploadHeap)
+		a.uploadLRU.PopLastUsed()
+		delete(a.uploads, state.key)
 	}
-	for a.respHeap.Len() > 0 {
-		item := a.respHeap[0]
-		if now.Sub(item.updated) <= a.ttl {
+	for {
+		state, ok := a.respLRU.PeekLastUsed()
+		if !ok || now.Sub(state.Updated) <= a.ttl {
 			break
 		}
-		delete(a.responses, item.key)
-		heap.Pop(&a.respHeap)
+		a.respLRU.PopLastUsed()
+		delete(a.responses, state.key)
 	}
 	a.mu.Unlock()
-}
-
-func (h uploadHeap) Len() int           { return len(h) }
-func (h uploadHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
-func (h uploadHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
-}
-func (h *uploadHeap) Push(x any) {
-	item := x.(*uploadHeapItem)
-	item.index = len(*h)
-	*h = append(*h, item)
-}
-func (h *uploadHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	item.index = -1
-	*h = old[:n-1]
-	return item
-}
-
-func (h respHeap) Len() int           { return len(h) }
-func (h respHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
-func (h respHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
-}
-func (h *respHeap) Push(x any) {
-	item := x.(*respHeapItem)
-	item.index = len(*h)
-	*h = append(*h, item)
-}
-func (h *respHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	item.index = -1
-	*h = old[:n-1]
-	return item
 }
 
 func (a *AppServer) truncateError(msg string) string {

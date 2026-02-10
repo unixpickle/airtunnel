@@ -64,6 +64,7 @@ class DnsChatClient {
     final errorBuffer = StringBuffer();
     var sawError = false;
     var sawDelta = false;
+    var lastErrorFlag = false;
     final startTime = DateTime.now();
     var lastProgress = DateTime.now();
     const backoff = [
@@ -98,6 +99,11 @@ class DnsChatClient {
       }
       if (response is _PollChunk) {
         backoffIndex = 0;
+        if (response.isError && !lastErrorFlag) {
+          nextOffset = 0;
+          errorBuffer.clear();
+        }
+        lastErrorFlag = response.isError;
         if (response.data.isNotEmpty) {
           final text = utf8.decode(response.data, allowMalformed: true);
           if (response.isError) {

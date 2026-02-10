@@ -230,6 +230,9 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 		// Done with empty chunk.
 		return a.responseResp(msgID, nextOffset, nil, true, false, resp.IsError), nil
 	}
+	if resp.IsError && int(nextOffset) >= len(resp.Buffer) {
+		return a.responseResp(msgID, 0, nil, false, false, true), nil
+	}
 	return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 }
 

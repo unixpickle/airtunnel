@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -63,7 +64,7 @@ func main() {
 	log.Printf("max_request_total_bytes=%d", maxPlainReq*128)
 	log.Printf("app_response_chunk_bytes=%d", maxPlainResp-(1+msgIDSize+4+1))
 
-	sessions := NewSessionStore()
+	sessions := NewSessionStore(72 * time.Hour)
 	app := NewAppServer(maxPlainReq, maxPlainResp)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
@@ -80,6 +81,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
+	sessions.Prune(time.Now())
 
 	if len(r.Question) == 0 {
 		log.Printf("dns: no question from %s", w.RemoteAddr())

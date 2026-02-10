@@ -17,6 +17,7 @@ class EncryptedDnsClient {
 
   Uint8List? _sessionId;
   SecretKey? _sessionKey;
+  DateTime? _sessionLastUsed;
 
   static const int _version = 1;
   static const int _typeHandshake = 1;
@@ -43,6 +44,7 @@ class EncryptedDnsClient {
     }
 
     await _ensureSession(timeoutMs);
+    _sessionLastUsed = DateTime.now();
     final sessionId = _sessionId!;
     final key = _sessionKey!;
 
@@ -60,6 +62,7 @@ class EncryptedDnsClient {
     }
 
     final decrypted = await _decryptMessage(respBytes, sessionId, key);
+    _sessionLastUsed = DateTime.now();
     if (decrypted.length > maxPlaintextResponseSize) {
       throw StateError('Response too large: ${decrypted.length} > $maxPlaintextResponseSize');
     }
@@ -71,7 +74,14 @@ class EncryptedDnsClient {
       throw StateError('Missing public key. Run scripts/gen_keys.sh.');
     }
     if (_sessionId != null && _sessionKey != null) {
-      return;
+      if (_sessionLastUsed == null ||
+          DateTime.now().difference(_sessionLastUsed!) >
+              const Duration(days: 1)) {
+        _sessionId = null;
+        _sessionKey = null;
+      } else {
+        return;
+      }
     }
 
     final publicKey = SimplePublicKey(

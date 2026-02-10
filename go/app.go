@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,8 @@ type AppServer struct {
 	mu         sync.Mutex
 	uploads    map[string]*UploadState
 	responses  map[string]*ResponseState
+	uploadHeap uploadHeap
+	respHeap   respHeap
 	maxReqSize int
 	maxTotal   int
 	maxResp    int
@@ -44,6 +47,7 @@ type UploadState struct {
 	Updated    time.Time
 	Done       bool
 	Processing bool
+	Seq        uint64
 }
 
 type ResponseState struct {
@@ -55,6 +59,21 @@ type ResponseState struct {
 	IsError    bool
 	MetaSent   bool
 	Updated    time.Time
+	Seq        uint64
+}
+
+type uploadHeap []uploadHeapItem
+type uploadHeapItem struct {
+	key     string
+	updated time.Time
+	seq     uint64
+}
+
+type respHeap []respHeapItem
+type respHeapItem struct {
+	key     string
+	updated time.Time
+	seq     uint64
 }
 
 type ChatRequest struct {
@@ -145,6 +164,8 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 		state.Chunks[offset] = append([]byte{}, data...)
 	}
 	state.Updated = time.Now()
+	state.Seq++
+	heap.Push(&a.uploadHeap, uploadHeapItem{key: key, updated: state.Updated, seq: state.Seq})
 
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
@@ -273,14 +294,19 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 	}
 
 	state := &ResponseState{}
+	key := a.scopedKey(sessionID, msgID)
 	a.mu.Lock()
-	a.responses[a.scopedKey(sessionID, msgID)] = state
+	a.responses[key] = state
 	a.mu.Unlock()
 
 	err := streamOpenAI(req, func(event StreamEvent) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.Updated = time.Now()
+		state.Seq++
+		a.mu.Lock()
+		heap.Push(&a.respHeap, respHeapItem{key: key, updated: state.Updated, seq: state.Seq})
+		a.mu.Unlock()
 		if event.ResponseID != "" {
 			state.ResponseID = event.ResponseID
 		}
@@ -307,16 +333,21 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 
 func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string) {
 	a.mu.Lock()
-	state := a.responses[a.scopedKey(sessionID, msgID)]
+	key := a.scopedKey(sessionID, msgID)
+	state := a.responses[key]
 	a.mu.Unlock()
 	if state == nil {
 		state = &ResponseState{}
 		a.mu.Lock()
-		a.responses[a.scopedKey(sessionID, msgID)] = state
+		a.responses[key] = state
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
 	state.Updated = time.Now()
+	state.Seq++
+	a.mu.Lock()
+	heap.Push(&a.respHeap, respHeapItem{key: key, updated: state.Updated, seq: state.Seq})
+	a.mu.Unlock()
 	state.ErrorMsg = msg
 	state.Done = true
 	state.IsError = true
@@ -393,20 +424,65 @@ func (a *AppServer) scopedKey(sessionID []byte, msgID []byte) string {
 func (a *AppServer) cleanupExpired() {
 	now := time.Now()
 	a.mu.Lock()
-	for k, v := range a.uploads {
-		if now.Sub(v.Updated) > a.ttl {
-			delete(a.uploads, k)
-		}
-	}
-	for k, v := range a.responses {
-		if v.Updated.IsZero() {
+	for a.uploadHeap.Len() > 0 {
+		item := a.uploadHeap[0]
+		state, ok := a.uploads[item.key]
+		if !ok {
+			heap.Pop(&a.uploadHeap)
 			continue
 		}
-		if now.Sub(v.Updated) > a.ttl {
-			delete(a.responses, k)
+		if state.Seq != item.seq || !state.Updated.Equal(item.updated) {
+			heap.Pop(&a.uploadHeap)
+			continue
 		}
+		if now.Sub(item.updated) <= a.ttl {
+			break
+		}
+		delete(a.uploads, item.key)
+		heap.Pop(&a.uploadHeap)
+	}
+	for a.respHeap.Len() > 0 {
+		item := a.respHeap[0]
+		state, ok := a.responses[item.key]
+		if !ok {
+			heap.Pop(&a.respHeap)
+			continue
+		}
+		if state.Seq != item.seq || !state.Updated.Equal(item.updated) {
+			heap.Pop(&a.respHeap)
+			continue
+		}
+		if now.Sub(item.updated) <= a.ttl {
+			break
+		}
+		delete(a.responses, item.key)
+		heap.Pop(&a.respHeap)
 	}
 	a.mu.Unlock()
+}
+
+func (h uploadHeap) Len() int           { return len(h) }
+func (h uploadHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
+func (h uploadHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *uploadHeap) Push(x any)        { *h = append(*h, x.(uploadHeapItem)) }
+func (h *uploadHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func (h respHeap) Len() int           { return len(h) }
+func (h respHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
+func (h respHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *respHeap) Push(x any)        { *h = append(*h, x.(respHeapItem)) }
+func (h *respHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 func (a *AppServer) truncateError(msg string) string {

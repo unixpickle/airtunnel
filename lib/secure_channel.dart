@@ -27,6 +27,8 @@ class EncryptedDnsClient {
   static const int _tagSize = 16;
   static const int _keySize = 32;
   static const int _signatureSize = 64;
+  static const int _clientNonceSize = 8;
+  static const int _x25519KeySize = 32;
 
   int get maxPlaintextRequestSize =>
       _clampMax(_inner.maxRequestSize - _sessionIdSize - _nonceSize - _tagSize);
@@ -72,48 +74,86 @@ class EncryptedDnsClient {
       return;
     }
 
-    final clientNonce = _randomBytes(8);
-    final req = Uint8List(1 + 1 + clientNonce.length);
-    req[0] = _version;
-    req[1] = _typeHandshake;
-    req.setRange(2, req.length, clientNonce);
-
-    final resp = await _inner.send(req, timeoutMs: timeoutMs);
-    if (resp.length != 1 + 1 + _sessionIdSize + _keySize + _signatureSize) {
-      throw StateError('Invalid handshake response length');
-    }
-
-    if (resp[0] != _version || resp[1] != _typeHandshakeResp) {
-      throw StateError('Invalid handshake response');
-    }
-
-    final sessionId = resp.sublist(2, 2 + _sessionIdSize);
-    final keyBytes = resp.sublist(2 + _sessionIdSize, 2 + _sessionIdSize + _keySize);
-    final signature = resp.sublist(2 + _sessionIdSize + _keySize);
-
-    final signed = BytesBuilder();
-    signed.addByte(_version);
-    signed.addByte(_typeHandshakeResp);
-    signed.add(sessionId);
-    signed.add(keyBytes);
-    signed.add(clientNonce);
-
     final publicKey = SimplePublicKey(
       base64.decode(serverPublicKeyBase64),
       type: KeyPairType.ed25519,
     );
-
     final ed25519 = Ed25519();
-    final ok = await ed25519.verify(
-      signed.takeBytes(),
-      signature: Signature(signature, publicKey: publicKey),
-    );
-    if (!ok) {
-      throw StateError('Invalid server signature');
-    }
+    final x25519 = X25519();
 
-    _sessionId = sessionId;
-    _sessionKey = SecretKey(keyBytes);
+    const backoff = [
+      Duration(milliseconds: 200),
+      Duration(milliseconds: 500),
+      Duration(seconds: 1),
+    ];
+
+    for (var attempt = 0; attempt < backoff.length; attempt++) {
+      try {
+        final clientNonce = _randomBytes(_clientNonceSize);
+        final clientKeyPair = await x25519.newKeyPair();
+        final clientPub = await clientKeyPair.extractPublicKey();
+        final clientPubBytes = Uint8List.fromList(clientPub.bytes);
+
+        final req = Uint8List(1 + 1 + _x25519KeySize + _clientNonceSize);
+        req[0] = _version;
+        req[1] = _typeHandshake;
+        req.setRange(2, 2 + _x25519KeySize, clientPubBytes);
+        req.setRange(2 + _x25519KeySize, req.length, clientNonce);
+
+        final resp = await _inner.send(req, timeoutMs: timeoutMs);
+        if (resp.length !=
+            1 + 1 + _sessionIdSize + _x25519KeySize + _signatureSize) {
+          throw StateError('Invalid handshake response length');
+        }
+        if (resp[0] != _version || resp[1] != _typeHandshakeResp) {
+          throw StateError('Invalid handshake response');
+        }
+
+        final sessionId = resp.sublist(2, 2 + _sessionIdSize);
+        final serverPub = resp.sublist(
+            2 + _sessionIdSize, 2 + _sessionIdSize + _x25519KeySize);
+        final signature =
+            resp.sublist(2 + _sessionIdSize + _x25519KeySize);
+
+        final signed = BytesBuilder();
+        signed.addByte(_version);
+        signed.addByte(_typeHandshakeResp);
+        signed.add(sessionId);
+        signed.add(serverPub);
+        signed.add(clientPubBytes);
+        signed.add(clientNonce);
+
+        final ok = await ed25519.verify(
+          signed.takeBytes(),
+          signature: Signature(signature, publicKey: publicKey),
+        );
+        if (!ok) {
+          throw StateError('Invalid server signature');
+        }
+
+        final shared = await x25519.sharedSecretKey(
+          keyPair: clientKeyPair,
+          remotePublicKey:
+              SimplePublicKey(serverPub, type: KeyPairType.x25519),
+        );
+        final derived = await _deriveSessionKey(
+          shared,
+          clientNonce,
+          sessionId,
+          clientPubBytes,
+          serverPub,
+        );
+
+        _sessionId = sessionId;
+        _sessionKey = derived;
+        return;
+      } catch (_) {
+        if (attempt == backoff.length - 1) {
+          rethrow;
+        }
+        await Future.delayed(backoff[attempt]);
+      }
+    }
   }
 
   Future<Uint8List> _decryptMessage(
@@ -160,6 +200,30 @@ class EncryptedDnsClient {
     );
     return Uint8List.fromList(plain);
   }
+}
+
+Future<SecretKey> _deriveSessionKey(
+  SecretKey shared,
+  Uint8List clientNonce,
+  Uint8List sessionId,
+  Uint8List clientPub,
+  Uint8List serverPub,
+) async {
+  final info = BytesBuilder();
+  info.add(utf8.encode('airtunnel/handshake'));
+  info.add(sessionId);
+  info.add(clientPub);
+  info.add(serverPub);
+
+  final hkdf = Hkdf(
+    hmac: Hmac.sha256(),
+    outputLength: _keySize,
+  );
+  return hkdf.deriveKey(
+    secretKey: shared,
+    nonce: clientNonce,
+    info: info.takeBytes(),
+  );
 }
 
 Uint8List _randomBytes(int length) {

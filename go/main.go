@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"log"
@@ -16,7 +18,8 @@ const (
 	handshakeResponse = 2
 	sessionIDSize     = 8
 	nonceSize         = 12
-	keySize           = 32
+	clientNonceSize   = 8
+	x25519KeySize     = 32
 	signatureSize     = 64
 )
 
@@ -139,34 +142,51 @@ func processPayload(payload []byte, priv ed25519.PrivateKey, sessions *SessionSt
 }
 
 func handleHandshake(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore) ([]byte, bool) {
-	if len(payload) != 1+1+8 {
+	if len(payload) != 1+1+x25519KeySize+clientNonceSize {
 		return nil, false
 	}
-	clientNonce := payload[2:]
+	clientPub := payload[2 : 2+x25519KeySize]
+	clientNonce := payload[2+x25519KeySize:]
+
+	curve := ecdh.X25519()
+	clientKey, err := curve.NewPublicKey(clientPub)
+	if err != nil {
+		return nil, false
+	}
+	serverPriv, err := curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, false
+	}
+	serverPub := serverPriv.PublicKey().Bytes()
 
 	sessionID, err := randomBytes(sessionIDSize)
 	if err != nil {
 		return nil, false
 	}
-	key, err := randomBytes(keySize)
+	shared, err := serverPriv.ECDH(clientKey)
+	if err != nil {
+		return nil, false
+	}
+	key, err := deriveSessionKey(shared, clientNonce, sessionID, clientPub, serverPub)
 	if err != nil {
 		return nil, false
 	}
 
-	signed := make([]byte, 0, 1+1+sessionIDSize+keySize+len(clientNonce))
+	signed := make([]byte, 0, 1+1+sessionIDSize+len(serverPub)+len(clientPub)+len(clientNonce))
 	signed = append(signed, protoVersion, handshakeResponse)
 	signed = append(signed, sessionID...)
-	signed = append(signed, key...)
+	signed = append(signed, serverPub...)
+	signed = append(signed, clientPub...)
 	signed = append(signed, clientNonce...)
 
 	sig := ed25519.Sign(priv, signed)
 
 	sessions.Put(sessionID, key)
 
-	resp := make([]byte, 0, 1+1+sessionIDSize+keySize+signatureSize)
+	resp := make([]byte, 0, 1+1+sessionIDSize+len(serverPub)+signatureSize)
 	resp = append(resp, protoVersion, handshakeResponse)
 	resp = append(resp, sessionID...)
-	resp = append(resp, key...)
+	resp = append(resp, serverPub...)
 	resp = append(resp, sig...)
 	return resp, true
 }

@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -67,4 +69,19 @@ func decryptAESGCM(key, nonce, ciphertext, aad []byte) ([]byte, error) {
 		return nil, err
 	}
 	return gcm.Open(nil, nonce, ciphertext, aad)
+}
+
+func deriveSessionKey(sharedSecret, clientNonce, sessionID, clientPub, serverPub []byte) ([]byte, error) {
+	info := make([]byte, 0, 20+len(sessionID)+len(clientPub)+len(serverPub))
+	info = append(info, []byte("airtunnel/handshake")...)
+	info = append(info, sessionID...)
+	info = append(info, clientPub...)
+	info = append(info, serverPub...)
+
+	h := hkdf.New(sha256.New, sharedSecret, clientNonce, info)
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(h, key); err != nil {
+		return nil, err
+	}
+	return key, nil
 }

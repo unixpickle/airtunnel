@@ -106,11 +106,15 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	data := payload[headerChunkSize:]
 	// Verbose per-chunk logs removed; keep only high-level events.
 
-	if int(total) > a.maxTotal {
+	if uint64(total) > uint64(a.maxTotal) {
 		log.Printf("app: request too large total=%d max=%d", total, a.maxTotal)
 		return a.errorResp(msgID, "request too large"), nil
 	}
-	if int(offset)+len(data) > int(total) {
+	if total == 0 && len(data) > 0 {
+		log.Printf("app: chunk out of range offset=%d len=%d total=%d", offset, len(data), total)
+		return a.errorResp(msgID, "chunk out of range"), nil
+	}
+	if offset > total || uint64(offset)+uint64(len(data)) > uint64(total) {
 		log.Printf("app: chunk out of range offset=%d len=%d total=%d", offset, len(data), total)
 		return a.errorResp(msgID, "chunk out of range"), nil
 	}
@@ -208,7 +212,7 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 		resp.MetaSent = true
 		return a.metaResp(msgID, resp.ResponseID), nil
 	}
-	if int(nextOffset) < len(resp.Buffer) {
+	if nextOffset < uint32(len(resp.Buffer)) {
 		// Sending response chunk.
 		end := len(resp.Buffer)
 		chunkMax := a.respChunk

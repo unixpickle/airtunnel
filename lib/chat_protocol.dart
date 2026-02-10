@@ -100,7 +100,12 @@ class DnsChatClient {
       if (response is _PollChunk) {
         backoffIndex = 0;
         if (response.isError && !lastErrorFlag) {
-          nextOffset = 0;
+          if (nextOffset != 0) {
+            nextOffset = 0;
+            errorBuffer.clear();
+            lastErrorFlag = true;
+            continue;
+          }
           errorBuffer.clear();
         }
         lastErrorFlag = response.isError;

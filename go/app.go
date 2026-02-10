@@ -47,7 +47,7 @@ type UploadState struct {
 	Updated    time.Time
 	Done       bool
 	Processing bool
-	Seq        uint64
+	item       *uploadHeapItem
 }
 
 type ResponseState struct {
@@ -59,21 +59,21 @@ type ResponseState struct {
 	IsError    bool
 	MetaSent   bool
 	Updated    time.Time
-	Seq        uint64
+	item       *respHeapItem
 }
 
-type uploadHeap []uploadHeapItem
+type uploadHeap []*uploadHeapItem
 type uploadHeapItem struct {
 	key     string
 	updated time.Time
-	seq     uint64
+	index   int
 }
 
-type respHeap []respHeapItem
+type respHeap []*respHeapItem
 type respHeapItem struct {
 	key     string
 	updated time.Time
-	seq     uint64
+	index   int
 }
 
 type ChatRequest struct {
@@ -163,9 +163,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	if _, exists := state.Chunks[offset]; !exists {
 		state.Chunks[offset] = append([]byte{}, data...)
 	}
-	state.Updated = time.Now()
-	state.Seq++
-	heap.Push(&a.uploadHeap, uploadHeapItem{key: key, updated: state.Updated, seq: state.Seq})
+	a.touchUploadLocked(key, state)
 
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
@@ -302,10 +300,8 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 	err := streamOpenAI(req, func(event StreamEvent) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		state.Updated = time.Now()
-		state.Seq++
 		a.mu.Lock()
-		heap.Push(&a.respHeap, respHeapItem{key: key, updated: state.Updated, seq: state.Seq})
+		a.touchRespLocked(key, state)
 		a.mu.Unlock()
 		if event.ResponseID != "" {
 			state.ResponseID = event.ResponseID
@@ -343,10 +339,8 @@ func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string)
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
-	state.Updated = time.Now()
-	state.Seq++
 	a.mu.Lock()
-	heap.Push(&a.respHeap, respHeapItem{key: key, updated: state.Updated, seq: state.Seq})
+	a.touchRespLocked(key, state)
 	a.mu.Unlock()
 	state.ErrorMsg = msg
 	state.Done = true
@@ -421,20 +415,37 @@ func (a *AppServer) scopedKey(sessionID []byte, msgID []byte) string {
 	return string(b)
 }
 
+func (a *AppServer) touchUploadLocked(key string, state *UploadState) {
+	now := time.Now()
+	state.Updated = now
+	if state.item == nil {
+		item := &uploadHeapItem{key: key, updated: now}
+		state.item = item
+		heap.Push(&a.uploadHeap, item)
+		return
+	}
+	state.item.updated = now
+	heap.Fix(&a.uploadHeap, state.item.index)
+}
+
+func (a *AppServer) touchRespLocked(key string, state *ResponseState) {
+	now := time.Now()
+	state.Updated = now
+	if state.item == nil {
+		item := &respHeapItem{key: key, updated: now}
+		state.item = item
+		heap.Push(&a.respHeap, item)
+		return
+	}
+	state.item.updated = now
+	heap.Fix(&a.respHeap, state.item.index)
+}
+
 func (a *AppServer) cleanupExpired() {
 	now := time.Now()
 	a.mu.Lock()
 	for a.uploadHeap.Len() > 0 {
 		item := a.uploadHeap[0]
-		state, ok := a.uploads[item.key]
-		if !ok {
-			heap.Pop(&a.uploadHeap)
-			continue
-		}
-		if state.Seq != item.seq || !state.Updated.Equal(item.updated) {
-			heap.Pop(&a.uploadHeap)
-			continue
-		}
 		if now.Sub(item.updated) <= a.ttl {
 			break
 		}
@@ -443,15 +454,6 @@ func (a *AppServer) cleanupExpired() {
 	}
 	for a.respHeap.Len() > 0 {
 		item := a.respHeap[0]
-		state, ok := a.responses[item.key]
-		if !ok {
-			heap.Pop(&a.respHeap)
-			continue
-		}
-		if state.Seq != item.seq || !state.Updated.Equal(item.updated) {
-			heap.Pop(&a.respHeap)
-			continue
-		}
 		if now.Sub(item.updated) <= a.ttl {
 			break
 		}
@@ -463,24 +465,42 @@ func (a *AppServer) cleanupExpired() {
 
 func (h uploadHeap) Len() int           { return len(h) }
 func (h uploadHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
-func (h uploadHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *uploadHeap) Push(x any)        { *h = append(*h, x.(uploadHeapItem)) }
+func (h uploadHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+func (h *uploadHeap) Push(x any) {
+	item := x.(*uploadHeapItem)
+	item.index = len(*h)
+	*h = append(*h, item)
+}
 func (h *uploadHeap) Pop() any {
 	old := *h
 	n := len(old)
 	item := old[n-1]
+	item.index = -1
 	*h = old[:n-1]
 	return item
 }
 
 func (h respHeap) Len() int           { return len(h) }
 func (h respHeap) Less(i, j int) bool { return h[i].updated.Before(h[j].updated) }
-func (h respHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *respHeap) Push(x any)        { *h = append(*h, x.(respHeapItem)) }
+func (h respHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+func (h *respHeap) Push(x any) {
+	item := x.(*respHeapItem)
+	item.index = len(*h)
+	*h = append(*h, item)
+}
 func (h *respHeap) Pop() any {
 	old := *h
 	n := len(old)
 	item := old[n-1]
+	item.index = -1
 	*h = old[:n-1]
 	return item
 }

@@ -11,21 +11,20 @@ type SessionStore struct {
 	sessions map[string]*sessionEntry
 	expHeap  sessionHeap
 	ttl      time.Duration
-	seq      uint64
 }
 
 type sessionEntry struct {
 	key      []byte
 	lastUsed time.Time
-	seq      uint64
+	item     *sessionHeapItem
 }
 
-type sessionHeap []sessionHeapItem
+type sessionHeap []*sessionHeapItem
 
 type sessionHeapItem struct {
 	id       string
 	lastUsed time.Time
-	seq      uint64
+	index    int
 }
 
 func NewSessionStore(ttl time.Duration) *SessionStore {
@@ -44,23 +43,32 @@ func (s *SessionStore) Get(id []byte) ([]byte, bool) {
 		return nil, false
 	}
 	entry.lastUsed = time.Now()
-	s.seq++
-	entry.seq = s.seq
-	heap.Push(&s.expHeap, sessionHeapItem{id: key, lastUsed: entry.lastUsed, seq: entry.seq})
+	if entry.item != nil {
+		entry.item.lastUsed = entry.lastUsed
+		heap.Fix(&s.expHeap, entry.item.index)
+	}
 	return entry.key, true
 }
 
 func (s *SessionStore) Put(id []byte, key []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seq++
-	entry := &sessionEntry{
-		key:      key,
-		lastUsed: time.Now(),
-		seq:      s.seq,
+	now := time.Now()
+	idStr := string(id)
+	entry, ok := s.sessions[idStr]
+	if !ok {
+		item := &sessionHeapItem{id: idStr, lastUsed: now}
+		entry = &sessionEntry{key: key, lastUsed: now, item: item}
+		s.sessions[idStr] = entry
+		heap.Push(&s.expHeap, item)
+		return
 	}
-	s.sessions[string(id)] = entry
-	heap.Push(&s.expHeap, sessionHeapItem{id: string(id), lastUsed: entry.lastUsed, seq: entry.seq})
+	entry.key = key
+	entry.lastUsed = now
+	if entry.item != nil {
+		entry.item.lastUsed = now
+		heap.Fix(&s.expHeap, entry.item.index)
+	}
 }
 
 func (s *SessionStore) Prune(now time.Time) {
@@ -68,15 +76,6 @@ func (s *SessionStore) Prune(now time.Time) {
 	defer s.mu.Unlock()
 	for s.expHeap.Len() > 0 {
 		item := s.expHeap[0]
-		entry, ok := s.sessions[item.id]
-		if !ok {
-			heap.Pop(&s.expHeap)
-			continue
-		}
-		if entry.seq != item.seq || !entry.lastUsed.Equal(item.lastUsed) {
-			heap.Pop(&s.expHeap)
-			continue
-		}
 		if now.Sub(item.lastUsed) <= s.ttl {
 			break
 		}
@@ -91,16 +90,23 @@ func (h sessionHeap) Less(i, j int) bool {
 	return h[i].lastUsed.Before(h[j].lastUsed)
 }
 
-func (h sessionHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h sessionHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
 
 func (h *sessionHeap) Push(x any) {
-	*h = append(*h, x.(sessionHeapItem))
+	item := x.(*sessionHeapItem)
+	item.index = len(*h)
+	*h = append(*h, item)
 }
 
 func (h *sessionHeap) Pop() any {
 	old := *h
 	n := len(old)
 	item := old[n-1]
+	item.index = -1
 	*h = old[:n-1]
 	return item
 }

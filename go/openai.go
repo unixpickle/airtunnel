@@ -39,24 +39,12 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		return err
 	}
 
-	httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/responses", bytes.NewReader(buf))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
 	client := &http.Client{Timeout: 0 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := doOpenAIRequest(client, req.APIKey, buf, req.PreviousResponseID != "")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return errors.New(string(data))
-	}
 
 	reader := bufio.NewReader(resp.Body)
 	var dataLines []string
@@ -93,6 +81,47 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
+}
+
+func doOpenAIRequest(client *http.Client, apiKey string, body []byte, hadPrev bool) (*http.Response, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/responses", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return resp, nil
+		}
+		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if hadPrev && attempt == 0 && isPrevResponseNotFound(data) {
+			log.Printf("openai: previous_response_id not found, retrying")
+			time.Sleep(750 * time.Millisecond)
+			continue
+		}
+		return nil, errors.New(string(data))
+	}
+	return nil, errors.New("openai request failed")
+}
+
+func isPrevResponseNotFound(data []byte) bool {
+	var obj struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return false
+	}
+	return obj.Error.Code == "previous_response_not_found" || obj.Error.Type == "previous_response_not_found"
 }
 
 func handleSSEData(lines []string, onEvent func(StreamEvent)) error {

@@ -37,10 +37,11 @@ type AppServer struct {
 }
 
 type UploadState struct {
-	Total   int
-	Chunks  map[uint32][]byte
-	Updated time.Time
-	Done    bool
+	Total      int
+	Chunks     map[uint32][]byte
+	Updated    time.Time
+	Done       bool
+	Processing bool
 }
 
 type ResponseState struct {
@@ -113,6 +114,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 
 	key := a.scopedKey(sessionID, msgID)
 	var completeData []byte
+	startProcess := false
 
 	a.mu.Lock()
 	if _, exists := a.responses[key]; exists {
@@ -140,10 +142,14 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
 		state.Done = true
+		if !state.Processing {
+			state.Processing = true
+			startProcess = true
+		}
 	}
 	a.mu.Unlock()
 
-	if completeData != nil {
+	if startProcess && completeData != nil {
 		log.Printf("app: received full request total=%d", len(completeData))
 		sidCopy := append([]byte{}, sessionID...)
 		midCopy := append([]byte{}, msgID...)
@@ -165,15 +171,18 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	resp := a.responses[key]
 	upload := a.uploads[key]
 	if resp == nil && upload != nil {
-		if assembled, ok := assembleChunks(upload); ok && !upload.Done {
-			upload.Done = true
-			completeData := assembled
-			sidCopy := append([]byte{}, sessionID...)
-			midCopy := append([]byte{}, msgID...)
-			a.mu.Unlock()
-			go a.processRequest(sidCopy, midCopy, completeData)
-			// Let the next poll find the response.
-			return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
+		if assembled, ok := assembleChunks(upload); ok {
+			if !upload.Processing {
+				upload.Done = true
+				upload.Processing = true
+				completeData := assembled
+				sidCopy := append([]byte{}, sessionID...)
+				midCopy := append([]byte{}, msgID...)
+				a.mu.Unlock()
+				go a.processRequest(sidCopy, midCopy, completeData)
+				// Let the next poll find the response.
+				return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
+			}
 		}
 	}
 	a.mu.Unlock()

@@ -507,6 +507,8 @@ class _ChatScreenState extends State<ChatScreen> {
         message: text,
         previousResponseId: chat.previousResponseId,
       );
+      // ignore: avoid_print
+      print('chat: previous_response_id=${chat.previousResponseId ?? ""}');
 
       String? pendingResponseId;
       await for (final chunk in stream) {

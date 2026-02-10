@@ -258,6 +258,9 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		a.setResponseError(sessionID, msgID, "missing api_key or message")
 		return
 	}
+	if req.PreviousResponseID != "" {
+		log.Printf("app: previous_response_id=%s", req.PreviousResponseID)
+	}
 	if req.Model == "" {
 		req.Model = "gpt-4o-mini"
 	}

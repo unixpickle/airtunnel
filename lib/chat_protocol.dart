@@ -86,6 +86,13 @@ class DnsChatClient {
         if (DateTime.now().difference(startTime) > const Duration(seconds: 90)) {
           throw StateError('Timed out waiting for response.');
         }
+        if (sawDelta &&
+            DateTime.now().difference(lastProgress) >
+                const Duration(seconds: 8)) {
+          await _sendDone(msgId);
+          yield ChatChunk(done: true);
+          break;
+        }
         if (DateTime.now().difference(lastProgress) > const Duration(seconds: 8)) {
           await _resendChunks(msgId, chunks);
           lastProgress = DateTime.now();

@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -12,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 type Session struct {

@@ -80,11 +80,13 @@ class AppSettings {
     required this.apiKey,
     required this.rootDomain,
     required this.server,
+    required this.useDiscovery,
   });
 
   final String apiKey;
   final String rootDomain;
   final String server;
+  final bool useDiscovery;
 
   bool get isComplete => apiKey.isNotEmpty && rootDomain.isNotEmpty;
 }
@@ -96,7 +98,7 @@ class RootScreen extends StatefulWidget {
   State<RootScreen> createState() => _RootScreenState();
 }
 
-class _RootScreenState extends State<RootScreen> {
+class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
   AppSettings? _settings;
   List<ChatSession> _chats = [];
   List<String> _detectedServers = const [];
@@ -105,12 +107,36 @@ class _RootScreenState extends State<RootScreen> {
   static const _prefsApiKey = 'openai_api_key';
   static const _prefsRoot = 'root_domain';
   static const _prefsServer = 'dns_server';
+  static const _prefsServerMode = 'dns_server_mode';
   static const _prefsChats = 'chat_sessions';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshServers();
+    }
+  }
+
+  Future<void> _refreshServers() async {
+    final resolver = DnsServerResolver();
+    final servers = await resolver.getServers();
+    if (!mounted) return;
+    setState(() {
+      _detectedServers = servers;
+    });
   }
 
   Future<void> _loadAll() async {
@@ -120,6 +146,8 @@ class _RootScreenState extends State<RootScreen> {
     final apiKey = prefs.getString(_prefsApiKey) ?? '';
     final root = prefs.getString(_prefsRoot) ?? '';
     final server = prefs.getString(_prefsServer) ?? '';
+    final mode = prefs.getString(_prefsServerMode) ?? '';
+    final useDiscovery = mode.isEmpty ? server.isEmpty : mode == 'discover';
     final rawChats = prefs.getString(_prefsChats);
     List<ChatSession> chats = [];
     if (rawChats != null && rawChats.isNotEmpty) {
@@ -131,7 +159,12 @@ class _RootScreenState extends State<RootScreen> {
 
     if (!mounted) return;
     setState(() {
-      _settings = AppSettings(apiKey: apiKey, rootDomain: root, server: server);
+      _settings = AppSettings(
+        apiKey: apiKey,
+        rootDomain: root,
+        server: server,
+        useDiscovery: useDiscovery,
+      );
       _chats = chats;
       _detectedServers = servers;
       _loading = false;
@@ -143,6 +176,8 @@ class _RootScreenState extends State<RootScreen> {
     await prefs.setString(_prefsApiKey, settings.apiKey);
     await prefs.setString(_prefsRoot, settings.rootDomain);
     await prefs.setString(_prefsServer, settings.server);
+    await prefs.setString(
+        _prefsServerMode, settings.useDiscovery ? 'discover' : 'manual');
     final prev = _settings;
     final resetConversation = prev != null &&
         (prev.apiKey != settings.apiKey ||
@@ -314,12 +349,15 @@ class _SetupScreenState extends State<SetupScreen> {
   final _rootController = TextEditingController();
   final _serverController = TextEditingController();
   String? _error;
+  bool _useDiscovery = true;
 
   @override
   void initState() {
     super.initState();
     if (widget.detectedServers.isNotEmpty) {
       _serverController.text = '${widget.detectedServers.first}:53';
+    } else {
+      _useDiscovery = false;
     }
   }
 
@@ -333,8 +371,19 @@ class _SetupScreenState extends State<SetupScreen> {
       });
       return;
     }
+    if (_useDiscovery && widget.detectedServers.isEmpty) {
+      setState(() {
+        _error = 'No DNS servers detected. Choose manual mode.';
+      });
+      return;
+    }
     await widget.onSave(
-      AppSettings(apiKey: apiKey, rootDomain: root, server: server),
+      AppSettings(
+        apiKey: apiKey,
+        rootDomain: root,
+        server: _useDiscovery ? '' : server,
+        useDiscovery: _useDiscovery,
+      ),
     );
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
@@ -367,10 +416,49 @@ class _SetupScreenState extends State<SetupScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'DNS Server Mode',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            const SizedBox(height: 6),
+            RadioListTile<bool>(
+              title: const Text('Discover automatically'),
+              value: true,
+              groupValue: _useDiscovery,
+              onChanged: widget.detectedServers.isEmpty
+                  ? null
+                  : (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _useDiscovery = value;
+                        if (_useDiscovery &&
+                            widget.detectedServers.isNotEmpty) {
+                          _serverController.text =
+                              '${widget.detectedServers.first}:53';
+                        }
+                      });
+                    },
+            ),
+            RadioListTile<bool>(
+              title: const Text('Set manually'),
+              value: false,
+              groupValue: _useDiscovery,
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _useDiscovery = value;
+                });
+              },
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _serverController,
+              enabled: !_useDiscovery,
               decoration: const InputDecoration(
-                labelText: 'DNS server (host:port, optional)',
+                labelText: 'DNS server (host:port)',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -415,6 +503,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _apiKeyController;
   late final TextEditingController _rootController;
   late final TextEditingController _serverController;
+  late bool _useDiscovery;
 
   @override
   void initState() {
@@ -422,13 +511,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _apiKeyController = TextEditingController(text: widget.initial.apiKey);
     _rootController = TextEditingController(text: widget.initial.rootDomain);
     _serverController = TextEditingController(text: widget.initial.server);
+    _useDiscovery = widget.initial.useDiscovery;
+    if (_useDiscovery && widget.detectedServers.isNotEmpty) {
+      _serverController.text = '${widget.detectedServers.first}:53';
+    }
   }
 
   void _save() {
     final settings = AppSettings(
       apiKey: _apiKeyController.text.trim(),
       rootDomain: _rootController.text.trim(),
-      server: _serverController.text.trim(),
+      server: _useDiscovery ? '' : _serverController.text.trim(),
+      useDiscovery: _useDiscovery,
     );
     Navigator.of(context).pop(settings);
   }
@@ -458,10 +552,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'DNS Server Mode',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            const SizedBox(height: 6),
+            RadioListTile<bool>(
+              title: const Text('Discover automatically'),
+              value: true,
+              groupValue: _useDiscovery,
+              onChanged: widget.detectedServers.isEmpty
+                  ? null
+                  : (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _useDiscovery = value;
+                        if (_useDiscovery &&
+                            widget.detectedServers.isNotEmpty) {
+                          _serverController.text =
+                              '${widget.detectedServers.first}:53';
+                        }
+                      });
+                    },
+            ),
+            RadioListTile<bool>(
+              title: const Text('Set manually'),
+              value: false,
+              groupValue: _useDiscovery,
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _useDiscovery = value;
+                });
+              },
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _serverController,
+              enabled: !_useDiscovery,
               decoration: const InputDecoration(
-                labelText: 'DNS server (host:port, optional)',
+                labelText: 'DNS server (host:port)',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -529,7 +662,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (!mounted) return;
 
-    final chosenServer = widget.settings.server.isEmpty
+    final chosenServer = widget.settings.useDiscovery
         ? (widget.detectedServers.isNotEmpty
             ? '${widget.detectedServers.first}:53'
             : '1.1.1.1:53')

@@ -203,7 +203,7 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	resp.mu.Lock()
 	defer resp.mu.Unlock()
 
-	if resp.ResponseID != "" && !resp.MetaSent {
+	if resp.Done && resp.ResponseID != "" && !resp.MetaSent {
 		log.Printf("app: sending response_id=%s", resp.ResponseID)
 		resp.MetaSent = true
 		return a.metaResp(msgID, resp.ResponseID), nil
@@ -271,7 +271,7 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.Updated = time.Now()
-		if event.ResponseID != "" && state.ResponseID == "" {
+		if event.ResponseID != "" {
 			state.ResponseID = event.ResponseID
 		}
 		if event.Delta != "" {

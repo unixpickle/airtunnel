@@ -148,7 +148,10 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 			log.Printf("openai: delta len=%d", len(delta))
 			onEvent(StreamEvent{Delta: delta})
 		}
-	case "response.completed", "response.output_text.done":
+	case "response.output_text.done":
+		// Do not end the stream here; wait for response.completed or [DONE].
+		log.Printf("openai: output_text done")
+	case "response.completed":
 		if id := extractResponseID(obj); id != "" {
 			log.Printf("openai: response completed id=%s", id)
 		} else {

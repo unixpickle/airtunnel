@@ -54,6 +54,7 @@ type ResponseState struct {
 	ErrorMsg   string
 	IsError    bool
 	MetaSent   bool
+	Updated    time.Time
 }
 
 type ChatRequest struct {
@@ -269,6 +270,7 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 	err := streamOpenAI(req, func(event StreamEvent) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+		state.Updated = time.Now()
 		if event.ResponseID != "" && state.ResponseID == "" {
 			state.ResponseID = event.ResponseID
 		}
@@ -304,6 +306,7 @@ func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string)
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
+	state.Updated = time.Now()
 	state.ErrorMsg = msg
 	state.Done = true
 	state.IsError = true
@@ -386,7 +389,10 @@ func (a *AppServer) cleanupExpired() {
 		}
 	}
 	for k, v := range a.responses {
-		if v.Done && v.MetaSent {
+		if v.Updated.IsZero() {
+			continue
+		}
+		if now.Sub(v.Updated) > a.ttl {
 			delete(a.responses, k)
 		}
 	}

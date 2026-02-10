@@ -22,9 +22,6 @@ func (s *sessionEntry) LastUsed() time.Time {
 	return s.lastUsed
 }
 
-func (s *sessionEntry) id() string {
-	return s.id
-}
 
 func NewSessionStore(ttl time.Duration) *SessionStore {
 	return &SessionStore{
@@ -76,6 +73,6 @@ func (s *SessionStore) Prune(now time.Time) {
 			break
 		}
 		s.tracker.PopLastUsed()
-		delete(s.sessions, entry.id())
+		delete(s.sessions, entry.id)
 	}
 }

@@ -79,6 +79,10 @@ func (l *LRUTracker[T]) PopLastUsed() (T, bool) {
 	return item.value, true
 }
 
+func (l *LRUTracker[T]) Len() int {
+	return len(l.items)
+}
+
 func (h lruHeap[T]) Len() int { return len(h) }
 
 func (h lruHeap[T]) Less(i, j int) bool {

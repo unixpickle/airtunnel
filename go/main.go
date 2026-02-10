@@ -64,7 +64,7 @@ func main() {
 	log.Printf("max_request_total_bytes=%d", maxPlainReq*128)
 	log.Printf("app_response_chunk_bytes=%d", maxPlainResp-(1+msgIDSize+4+1))
 
-	sessions := NewSessionStore(72 * time.Hour)
+	sessions := NewSessionStore(72*time.Hour, 5000)
 	app := NewAppServer(maxPlainReq, maxPlainResp)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {

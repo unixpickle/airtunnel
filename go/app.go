@@ -38,6 +38,8 @@ type AppServer struct {
 	maxResp    int
 	respChunk  int
 	ttl        time.Duration
+	maxUploads int
+	maxResps   int
 }
 
 type UploadState struct {
@@ -91,6 +93,8 @@ func NewAppServer(maxReqSize, maxRespSize int) *AppServer {
 		maxResp:    maxRespSize,
 		respChunk:  respChunk,
 		ttl:        10 * time.Minute,
+		maxUploads: 1000,
+		maxResps:   1000,
 	}
 }
 
@@ -160,6 +164,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	}
 	state.Updated = time.Now()
 	a.uploadLRU.PushOrUpdate(state)
+	a.enforceUploadCapLocked()
 
 	if assembled, ok := assembleChunks(state); ok {
 		completeData = assembled
@@ -292,6 +297,7 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 	a.mu.Lock()
 	a.responses[key] = state
 	a.respLRU.PushOrUpdate(state)
+	a.enforceRespCapLocked()
 	a.mu.Unlock()
 
 	err := streamOpenAI(req, func(event StreamEvent) {
@@ -335,6 +341,7 @@ func (a *AppServer) setResponseError(sessionID []byte, msgID []byte, msg string)
 		a.mu.Lock()
 		a.responses[key] = state
 		a.respLRU.PushOrUpdate(state)
+		a.enforceRespCapLocked()
 		a.mu.Unlock()
 	}
 	state.mu.Lock()
@@ -435,6 +442,32 @@ func (a *AppServer) cleanupExpired() {
 		delete(a.responses, state.key)
 	}
 	a.mu.Unlock()
+}
+
+func (a *AppServer) enforceUploadCapLocked() {
+	if a.maxUploads <= 0 {
+		return
+	}
+	for a.uploadLRU.Len() > a.maxUploads {
+		state, ok := a.uploadLRU.PopLastUsed()
+		if !ok {
+			return
+		}
+		delete(a.uploads, state.key)
+	}
+}
+
+func (a *AppServer) enforceRespCapLocked() {
+	if a.maxResps <= 0 {
+		return
+	}
+	for a.respLRU.Len() > a.maxResps {
+		state, ok := a.respLRU.PopLastUsed()
+		if !ok {
+			return
+		}
+		delete(a.responses, state.key)
+	}
 }
 
 func (a *AppServer) truncateError(msg string) string {

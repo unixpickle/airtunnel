@@ -145,7 +145,9 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 
 	if completeData != nil {
 		log.Printf("app: received full request total=%d", len(completeData))
-		go a.processRequest(sessionID, msgID, completeData)
+		sidCopy := append([]byte{}, sessionID...)
+		midCopy := append([]byte{}, msgID...)
+		go a.processRequest(sidCopy, midCopy, completeData)
 	}
 	return a.ackResp(msgID, offset), nil
 }
@@ -159,18 +161,24 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 
 	a.cleanupExpired()
 	a.mu.Lock()
-	resp := a.responses[a.scopedKey(sessionID, msgID)]
-	upload := a.uploads[a.scopedKey(sessionID, msgID)]
+	key := a.scopedKey(sessionID, msgID)
+	resp := a.responses[key]
+	upload := a.uploads[key]
+	if resp == nil && upload != nil {
+		if assembled, ok := assembleChunks(upload); ok && !upload.Done {
+			upload.Done = true
+			completeData := assembled
+			sidCopy := append([]byte{}, sessionID...)
+			midCopy := append([]byte{}, msgID...)
+			a.mu.Unlock()
+			go a.processRequest(sidCopy, midCopy, completeData)
+			// Let the next poll find the response.
+			return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
+		}
+	}
 	a.mu.Unlock()
 	if resp == nil {
 		if upload != nil {
-			if assembled, ok := assembleChunks(upload); ok && !upload.Done {
-				upload.Done = true
-				completeData := assembled
-				go a.processRequest(sessionID, msgID, completeData)
-				// Let the next poll find the response.
-				return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
-			}
 			log.Printf("app: poll pending msg=%s upload total=%d chunks=%d", shortHex(msgID), upload.Total, len(upload.Chunks))
 		} else {
 			log.Printf("app: poll unknown msg=%s (pending)", shortHex(msgID))

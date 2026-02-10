@@ -196,7 +196,8 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 		log.Printf("app: decrypted empty payload session=%s", shortHex(id))
 	}
 
-	respPayload, err := app.Handle(id, plaintext)
+	sidCopy := append([]byte{}, id...)
+	respPayload, err := app.Handle(sidCopy, plaintext)
 	if err != nil {
 		return nil, false
 	}

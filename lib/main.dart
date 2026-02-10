@@ -39,7 +39,8 @@ class ChatMessage {
       };
 
   static ChatMessage fromJson(Map<String, dynamic> json) {
-    return ChatMessage(role: json['role'] as String, text: json['text'] as String);
+    return ChatMessage(
+        role: json['role'] as String, text: json['text'] as String);
   }
 }
 
@@ -335,7 +336,8 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
 }
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key, required this.detectedServers, required this.onSave});
+  const SetupScreen(
+      {super.key, required this.detectedServers, required this.onSave});
 
   final List<String> detectedServers;
   final Future<void> Function(AppSettings settings) onSave;
@@ -466,7 +468,8 @@ class _SetupScreenState extends State<SetupScreen> {
             if (widget.detectedServers.isNotEmpty)
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('Detected DNS: ${widget.detectedServers.join(', ')}'),
+                child:
+                    Text('Detected DNS: ${widget.detectedServers.join(', ')}'),
               ),
             const SizedBox(height: 12),
             if (_error != null)
@@ -490,7 +493,8 @@ class _SetupScreenState extends State<SetupScreen> {
 }
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.initial, required this.detectedServers});
+  const SettingsScreen(
+      {super.key, required this.initial, required this.detectedServers});
 
   final AppSettings initial;
   final List<String> detectedServers;
@@ -517,99 +521,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _save() {
-    final settings = AppSettings(
+  AppSettings _currentSettings() {
+    return AppSettings(
       apiKey: _apiKeyController.text.trim(),
       rootDomain: _rootController.text.trim(),
       server: _useDiscovery ? '' : _serverController.text.trim(),
       useDiscovery: _useDiscovery,
     );
-    Navigator.of(context).pop(settings);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(
-              controller: _apiKeyController,
-              decoration: const InputDecoration(
-                labelText: 'OpenAI API key',
-                border: OutlineInputBorder(),
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(_currentSettings());
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Settings'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(_currentSettings()),
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              TextField(
+                controller: _apiKeyController,
+                decoration: const InputDecoration(
+                  labelText: 'OpenAI API key',
+                  border: OutlineInputBorder(),
+                ),
+                obscureText: true,
               ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _rootController,
-              decoration: const InputDecoration(
-                labelText: 'Root domain',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _rootController,
+                decoration: const InputDecoration(
+                  labelText: 'Root domain',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'DNS Server Mode',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            const SizedBox(height: 6),
-            RadioListTile<bool>(
-              title: const Text('Discover automatically'),
-              value: true,
-              groupValue: _useDiscovery,
-              onChanged: widget.detectedServers.isEmpty
-                  ? null
-                  : (value) {
-                      if (value == null) return;
-                      setState(() {
-                        _useDiscovery = value;
-                        if (_useDiscovery &&
-                            widget.detectedServers.isNotEmpty) {
-                          _serverController.text =
-                              '${widget.detectedServers.first}:53';
-                        }
-                      });
-                    },
-            ),
-            RadioListTile<bool>(
-              title: const Text('Set manually'),
-              value: false,
-              groupValue: _useDiscovery,
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() {
-                  _useDiscovery = value;
-                });
-              },
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _serverController,
-              enabled: !_useDiscovery,
-              decoration: const InputDecoration(
-                labelText: 'DNS server (host:port)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (widget.detectedServers.isNotEmpty)
+              const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('Detected DNS: ${widget.detectedServers.join(', ')}'),
+                child: Text(
+                  'DNS Server Mode',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: _save,
-              child: const Text('Save'),
-            ),
-          ],
+              const SizedBox(height: 6),
+              RadioListTile<bool>(
+                title: const Text('Discover automatically'),
+                value: true,
+                groupValue: _useDiscovery,
+                onChanged: widget.detectedServers.isEmpty
+                    ? null
+                    : (value) {
+                        if (value == null) return;
+                        setState(() {
+                          _useDiscovery = value;
+                          if (_useDiscovery &&
+                              widget.detectedServers.isNotEmpty) {
+                            _serverController.text =
+                                '${widget.detectedServers.first}:53';
+                          }
+                        });
+                      },
+              ),
+              RadioListTile<bool>(
+                title: const Text('Set manually'),
+                value: false,
+                groupValue: _useDiscovery,
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _useDiscovery = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _serverController,
+                enabled: !_useDiscovery,
+                decoration: const InputDecoration(
+                  labelText: 'DNS server (host:port)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (widget.detectedServers.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                      'Detected DNS: ${widget.detectedServers.join(', ')}'),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -765,8 +776,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     alignment:
                         isUser ? Alignment.centerRight : Alignment.centerLeft,
                     child: Container(
-                      margin:
-                          const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                      margin: const EdgeInsets.symmetric(
+                          vertical: 6, horizontal: 8),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: isUser
@@ -782,12 +793,14 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             if (_error != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     _error!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),
               ),

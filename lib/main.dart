@@ -508,9 +508,10 @@ class _ChatScreenState extends State<ChatScreen> {
         previousResponseId: chat.previousResponseId,
       );
 
+      String? pendingResponseId;
       await for (final chunk in stream) {
         if (chunk.responseId != null) {
-          chat.previousResponseId = chunk.responseId;
+          pendingResponseId = chunk.responseId;
         }
         if (chunk.delta != null && chunk.delta!.isNotEmpty) {
           setState(() {
@@ -524,6 +525,9 @@ class _ChatScreenState extends State<ChatScreen> {
         if (chunk.done) {
           break;
         }
+      }
+      if (pendingResponseId != null && pendingResponseId!.isNotEmpty) {
+        chat.previousResponseId = pendingResponseId;
       }
     } catch (e) {
       final msg = e.toString();

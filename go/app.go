@@ -164,6 +164,13 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	a.mu.Unlock()
 	if resp == nil {
 		if upload != nil {
+			if assembled, ok := assembleChunks(upload); ok && !upload.Done {
+				upload.Done = true
+				completeData := assembled
+				go a.processRequest(sessionID, msgID, completeData)
+				// Let the next poll find the response.
+				return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
+			}
 			log.Printf("app: poll pending msg=%s upload total=%d chunks=%d", shortHex(msgID), upload.Total, len(upload.Chunks))
 		} else {
 			log.Printf("app: poll unknown msg=%s (pending)", shortHex(msgID))

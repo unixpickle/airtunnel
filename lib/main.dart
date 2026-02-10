@@ -762,6 +762,44 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.of(context).pop(chat),
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.edit),
+              tooltip: 'Rename',
+              onPressed: () async {
+                final controller = TextEditingController(text: chat.title);
+                final name = await showDialog<String>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Rename chat'),
+                    content: TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(
+                        labelText: 'Chat name',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: () =>
+                            Navigator.of(context).pop(controller.text.trim()),
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                );
+                if (!mounted) return;
+                if (name == null || name.isEmpty) return;
+                setState(() {
+                  chat.title = name;
+                });
+              },
+            ),
+          ],
         ),
         body: Column(
           children: [

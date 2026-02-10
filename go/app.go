@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -183,6 +185,8 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 				// Let the next poll find the response.
 				return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 			}
+		} else if len(upload.Chunks) >= 2 {
+			log.Printf("app: assemble failed total=%d %s", upload.Total, summarizeChunks(upload))
 		}
 	}
 	a.mu.Unlock()
@@ -430,6 +434,19 @@ func assembleChunks(state *UploadState) ([]byte, bool) {
 		return nil, false
 	}
 	return buf, true
+}
+
+func summarizeChunks(state *UploadState) string {
+	keys := make([]int, 0, len(state.Chunks))
+	for k := range state.Chunks {
+		keys = append(keys, int(k))
+	}
+	sort.Ints(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%d:%d", k, len(state.Chunks[uint32(k)])))
+	}
+	return "chunks=[" + strings.Join(parts, ",") + "]"
 }
 
 func readU32(data []byte, offset int) uint32 {

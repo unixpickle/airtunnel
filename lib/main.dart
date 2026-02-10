@@ -527,6 +527,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputController.clear();
     _scrollToBottom();
 
+    if (!mounted) return;
+
     final chosenServer = widget.settings.server.isEmpty
         ? (widget.detectedServers.isNotEmpty
             ? '${widget.detectedServers.first}:53'
@@ -547,6 +549,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
       String? pendingResponseId;
       await for (final chunk in stream) {
+        if (!mounted) {
+          break;
+        }
         if (chunk.responseId != null) {
           pendingResponseId = chunk.responseId;
         }
@@ -567,6 +572,7 @@ class _ChatScreenState extends State<ChatScreen> {
         chat.previousResponseId = pendingResponseId;
       }
     } catch (e) {
+      if (!mounted) return;
       final msg = e.toString();
       if (msg.contains('previous response with id')) {
         setState(() {
@@ -574,11 +580,12 @@ class _ChatScreenState extends State<ChatScreen> {
           _error = 'Conversation expired. Start a new chat or resend.';
         });
       } else {
-      setState(() {
-        _error = 'Send failed: $e';
-      });
+        setState(() {
+          _error = 'Send failed: $e';
+        });
       }
     } finally {
+      if (!mounted) return;
       setState(() {
         _sending = false;
       });

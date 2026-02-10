@@ -191,6 +191,13 @@ class _RootScreenState extends State<RootScreen> {
     if (updated != null) {
       final idx = _chats.indexWhere((c) => c.id == updated.id);
       if (idx >= 0) {
+        if (updated.messages.isEmpty) {
+          setState(() {
+            _chats.removeAt(idx);
+          });
+          await _saveChats();
+          return;
+        }
         setState(() {
           _chats[idx] = updated;
         });

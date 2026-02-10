@@ -104,7 +104,7 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	offset := readU32(payload, 1+msgIDSize)
 	total := readU32(payload, 1+msgIDSize+4)
 	data := payload[headerChunkSize:]
-	log.Printf("app: chunk msg=%s offset=%d len=%d total=%d", shortHex(msgID), offset, len(data), total)
+	// Verbose per-chunk logs removed; keep only high-level events.
 
 	if int(total) > a.maxTotal {
 		log.Printf("app: request too large total=%d max=%d", total, a.maxTotal)
@@ -193,9 +193,9 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	a.mu.Unlock()
 	if resp == nil {
 		if upload != nil {
-			log.Printf("app: poll pending msg=%s upload total=%d chunks=%d", shortHex(msgID), upload.Total, len(upload.Chunks))
+			// Pending upload: no response yet.
 		} else {
-			log.Printf("app: poll unknown msg=%s (pending)", shortHex(msgID))
+			// Unknown message: return pending.
 		}
 		return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
 	}
@@ -209,7 +209,7 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 		return a.metaResp(msgID, resp.ResponseID), nil
 	}
 	if int(nextOffset) < len(resp.Buffer) {
-		log.Printf("app: sending chunk offset=%d total=%d done=%v", nextOffset, len(resp.Buffer), resp.Done)
+		// Sending response chunk.
 		end := len(resp.Buffer)
 		chunkMax := a.respChunk
 		hardMax := a.maxResp - headerRespSize
@@ -227,7 +227,7 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 		return a.responseResp(msgID, nextOffset, data, done, false, resp.IsError), nil
 	}
 	if resp.Done {
-		log.Printf("app: done with empty chunk offset=%d", nextOffset)
+		// Done with empty chunk.
 		return a.responseResp(msgID, nextOffset, nil, true, false, resp.IsError), nil
 	}
 	return a.responseResp(msgID, nextOffset, nil, false, true, false), nil

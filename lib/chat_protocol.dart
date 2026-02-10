@@ -168,9 +168,6 @@ class DnsChatClient {
       Uint8List msgId, int offset, int total, Uint8List chunk) async {
     const retries = 3;
     for (var attempt = 0; attempt < retries; attempt++) {
-      // Debug: track outgoing chunks and retries.
-      // ignore: avoid_print
-      print('send chunk offset=$offset len=${chunk.length} total=$total attempt=${attempt + 1}');
       final payload = _buildChunk(msgId, offset, total, chunk);
       Uint8List resp;
       try {
@@ -186,8 +183,6 @@ class DnsChatClient {
       }
       final parsed = _parseResponse(resp);
       if (parsed is _Ack && parsed.offset == offset) {
-        // ignore: avoid_print
-        print('ack offset=$offset');
         return;
       }
       if (parsed is _ErrorResp) {
@@ -238,38 +233,26 @@ class DnsChatClient {
       resp = await _channel.send(buffer.takeBytes());
     } catch (e) {
       if (_isServFail(e)) {
-        // ignore: avoid_print
-        print('poll: servfail');
         return _PollPending();
       }
       rethrow;
     }
     if (resp.isEmpty) {
-      // ignore: avoid_print
-      print('poll: empty');
       return _PollPending();
     }
     final parsed = _parseResponse(resp);
     if (parsed is _ErrorResp) {
-      // ignore: avoid_print
-      print('poll: error ${parsed.message}');
       return _PollError(parsed.message);
     }
     if (parsed is _MetaResp) {
-      // ignore: avoid_print
-      print('poll: meta response_id');
       return _PollMeta(parsed.responseId);
     }
     if (parsed is _ChunkResp) {
-      // ignore: avoid_print
-      print('poll: chunk len=${parsed.data.length} done=${parsed.done} pending=${parsed.pending} error=${parsed.isError}');
       if (parsed.pending) {
         return _PollPending();
       }
       return _PollChunk(parsed.data, parsed.done, parsed.isError);
     }
-    // ignore: avoid_print
-    print('poll: unknown');
     return _PollPending();
   }
 

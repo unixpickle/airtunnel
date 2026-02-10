@@ -142,6 +142,7 @@ class EncryptedDnsClient {
           sessionId,
           clientPubBytes,
           serverPub,
+          _keySize,
         );
 
         _sessionId = sessionId;
@@ -208,6 +209,7 @@ Future<SecretKey> _deriveSessionKey(
   Uint8List sessionId,
   Uint8List clientPub,
   Uint8List serverPub,
+  int keySize,
 ) async {
   final info = BytesBuilder();
   info.add(utf8.encode('airtunnel/handshake'));
@@ -217,7 +219,7 @@ Future<SecretKey> _deriveSessionKey(
 
   final hkdf = Hkdf(
     hmac: Hmac.sha256(),
-    outputLength: _keySize,
+    outputLength: keySize,
   );
   return hkdf.deriveKey(
     secretKey: shared,

@@ -167,18 +167,21 @@ class DnsChatClient {
   Future<void> _sendChunkWithRetry(
       Uint8List msgId, int offset, int total, Uint8List chunk) async {
     const retries = 3;
+    Object? lastError;
     for (var attempt = 0; attempt < retries; attempt++) {
       final payload = _buildChunk(msgId, offset, total, chunk);
       Uint8List resp;
       try {
         resp = await _channel.send(payload);
       } catch (e) {
+        lastError = e;
         if (_isServFail(e)) {
           continue;
         }
         rethrow;
       }
       if (resp.isEmpty) {
+        lastError = StateError('Empty response');
         continue;
       }
       final parsed = _parseResponse(resp);
@@ -188,8 +191,10 @@ class DnsChatClient {
       if (parsed is _ErrorResp) {
         throw StateError(parsed.message);
       }
+      lastError = StateError('Unexpected response');
     }
-    throw StateError('Failed to send chunk at offset $offset');
+    final suffix = lastError != null ? ': $lastError' : '';
+    throw StateError('Failed to send chunk at offset $offset$suffix');
   }
 
   Uint8List _buildChunk(Uint8List msgId, int offset, int total, Uint8List data) {

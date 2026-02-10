@@ -59,64 +59,93 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 	}
 
 	reader := bufio.NewReader(resp.Body)
+	var dataLines []string
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if len(dataLines) > 0 {
+					if err := handleSSEData(dataLines, onEvent); err != nil {
+						if errors.Is(err, io.EOF) {
+							return nil
+						}
+						return err
+					}
+				}
 				return nil
 			}
 			return err
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
+			if len(dataLines) > 0 {
+				if err := handleSSEData(dataLines, onEvent); err != nil {
+					if errors.Is(err, io.EOF) {
+						return nil
+					}
+					return err
+				}
+				dataLines = dataLines[:0]
+			}
 			continue
 		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			onEvent(StreamEvent{Done: true})
-			return nil
-		}
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(data), &obj); err != nil {
-			continue
-		}
-		typeVal, _ := obj["type"].(string)
-		switch typeVal {
-		case "response.created":
-			id := extractResponseID(obj)
-			if id != "" {
-				log.Printf("openai: response created id=%s", id)
-				onEvent(StreamEvent{ResponseID: id})
-			}
-		case "response.output_text.delta":
-			delta := extractDelta(obj)
-			if delta != "" {
-				log.Printf("openai: delta len=%d", len(delta))
-				onEvent(StreamEvent{Delta: delta})
-			}
-		case "response.completed", "response.output_text.done":
-			id := extractResponseID(obj)
-			if id != "" {
-				log.Printf("openai: response completed id=%s", id)
-				onEvent(StreamEvent{ResponseID: id})
-			} else {
-				log.Printf("openai: response completed without id")
-			}
-			onEvent(StreamEvent{Done: true})
-			return nil
-		case "response.failed", "error":
-			errMsg := extractError(obj)
-			if errMsg == "" {
-				errMsg = "openai error"
-			}
-			log.Printf("openai: error=%s", errMsg)
-			onEvent(StreamEvent{Error: errMsg})
-			return nil
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
+}
+
+func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
+	data := strings.Join(lines, "\n")
+	if data == "[DONE]" {
+		onEvent(StreamEvent{Done: true})
+		return io.EOF
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(data), &obj); err != nil {
+		return nil
+	}
+	typeVal, _ := obj["type"].(string)
+	switch typeVal {
+	case "response.created":
+		id := extractResponseID(obj)
+		if id != "" {
+			log.Printf("openai: response created id=%s", id)
+			onEvent(StreamEvent{ResponseID: id})
+		}
+	case "response.output_text.delta":
+		delta := extractDelta(obj)
+		if delta != "" {
+			log.Printf("openai: delta len=%d", len(delta))
+			onEvent(StreamEvent{Delta: delta})
+		}
+	case "response.completed", "response.output_text.done":
+		id := extractResponseID(obj)
+		if id != "" {
+			log.Printf("openai: response completed id=%s", id)
+			onEvent(StreamEvent{ResponseID: id})
+		} else {
+			log.Printf("openai: response completed without id data=%s", truncateLog(data, 500))
+		}
+		onEvent(StreamEvent{Done: true})
+		return io.EOF
+	case "response.failed", "error":
+		errMsg := extractError(obj)
+		if errMsg == "" {
+			errMsg = "openai error"
+		}
+		log.Printf("openai: error=%s", errMsg)
+		onEvent(StreamEvent{Error: errMsg})
+		return io.EOF
+	}
+	return nil
+}
+
+func truncateLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func extractResponseID(obj map[string]any) string {

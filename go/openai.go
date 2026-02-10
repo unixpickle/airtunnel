@@ -106,13 +106,13 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 		return nil
 	}
 	typeVal, _ := obj["type"].(string)
+	// Capture any response_id present on any event type.
+	if id := extractResponseID(obj); id != "" {
+		onEvent(StreamEvent{ResponseID: id})
+	}
 	switch typeVal {
 	case "response.created":
-		id := extractResponseID(obj)
-		if id != "" {
-			log.Printf("openai: response created id=%s", id)
-			onEvent(StreamEvent{ResponseID: id})
-		}
+		log.Printf("openai: response created")
 	case "response.output_text.delta":
 		delta := extractDelta(obj)
 		if delta != "" {
@@ -120,10 +120,8 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 			onEvent(StreamEvent{Delta: delta})
 		}
 	case "response.completed", "response.output_text.done":
-		id := extractResponseID(obj)
-		if id != "" {
+		if id := extractResponseID(obj); id != "" {
 			log.Printf("openai: response completed id=%s", id)
-			onEvent(StreamEvent{ResponseID: id})
 		} else {
 			log.Printf("openai: response completed without id data=%s", truncateLog(data, 500))
 		}

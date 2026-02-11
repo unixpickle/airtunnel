@@ -322,6 +322,11 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		}
 		if event.Done {
 			state.Done = true
+			if !state.IsError && len(state.Buffer) == 0 {
+				state.IsError = true
+				state.ErrorMsg = "empty response from model"
+				state.Buffer = []byte(state.ErrorMsg)
+			}
 			log.Printf("app: completion done msg=%s bytes=%d error=%v", shortHex(msgID), len(state.Buffer), state.IsError)
 		}
 	})

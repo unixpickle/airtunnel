@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"log"
+	mathrand "math/rand"
 	"strings"
 	"time"
 
@@ -31,10 +32,14 @@ func main() {
 	var addr string
 	var keyPath string
 	var toolPassword string
+	var latencyJitter time.Duration
+	var dropProb float64
 	flag.StringVar(&root, "root", "", "root domain (e.g. someserver.google.com)")
 	flag.StringVar(&addr, "addr", ":5353", "listen address")
 	flag.StringVar(&keyPath, "key", "", "ed25519 private key PEM")
 	flag.StringVar(&toolPassword, "tool-pass", "", "password for URL tool (empty disables)")
+	flag.DurationVar(&latencyJitter, "latency-jitter", 0, "max random response delay")
+	flag.Float64Var(&dropProb, "drop-packet-prob", 0, "probability of dropping responses")
 	flag.Parse()
 
 	if strings.TrimSpace(root) == "" {
@@ -43,6 +48,8 @@ func main() {
 	if strings.TrimSpace(keyPath) == "" {
 		log.Fatal("-key is required")
 	}
+
+	mathrand.Seed(time.Now().UnixNano())
 
 	priv, err := loadEd25519PrivateKey(keyPath)
 	if err != nil {
@@ -70,7 +77,7 @@ func main() {
 	app := NewAppServer(maxPlainReq, maxPlainResp, toolPassword)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
-		handleRequest(w, r, root, priv, sessions, app, maxReq, maxResp)
+		handleRequest(w, r, root, priv, sessions, app, maxReq, maxResp, latencyJitter, dropProb)
 	})
 
 	log.Printf("listening on %s", addr)
@@ -79,11 +86,15 @@ func main() {
 	}
 }
 
-func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer, maxReq, maxResp int) {
+func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer, maxReq, maxResp int, latencyJitter time.Duration, dropProb float64) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
 	sessions.Prune(time.Now())
+	if dropProb > 0 && mathrand.Float64() < dropProb {
+		log.Printf("dns: dropped response (prob=%.3f)", dropProb)
+		return
+	}
 
 	if len(r.Question) == 0 {
 		log.Printf("dns: no question from %s", w.RemoteAddr())
@@ -133,6 +144,9 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 	}
 	m.Answer = append(m.Answer, txt)
 	log.Printf("dns: respond len=%d txt_len=%d", len(respPayload), len(txt.Txt[0]))
+	if latencyJitter > 0 {
+		time.Sleep(time.Duration(mathrand.Int63n(int64(latencyJitter) + 1)))
+	}
 	_ = w.WriteMsg(m)
 }
 

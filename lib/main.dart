@@ -715,6 +715,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _error = null;
       chat.messages.add(ChatMessage(role: 'user', text: text));
       chat.messages.add(ChatMessage(role: 'assistant', text: ''));
+      if (chat.title == 'New chat') {
+        chat.title = _titleFrom(text);
+      }
     });
 
     _inputController.clear();

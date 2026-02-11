@@ -81,8 +81,11 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		onEvent(StreamEvent{Done: true})
 		return nil
 	}
-	onEvent(StreamEvent{Done: true})
-	return nil
+	streamBody, err := createResponse(req, tools, true, nil)
+	if err != nil {
+		return err
+	}
+	return streamResponse(req, tools, streamBody, onEvent)
 }
 
 func doOpenAIRequest(client *http.Client, apiKey string, body []byte, hadPrev bool) (*http.Response, error) {

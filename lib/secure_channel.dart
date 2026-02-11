@@ -34,8 +34,8 @@ class EncryptedDnsClient {
   int get maxPlaintextRequestSize =>
       _clampMax(_inner.maxRequestSize - _sessionIdSize - _nonceSize - _tagSize);
 
-  int get maxPlaintextResponseSize =>
-      _clampMax(_inner.maxResponseSize - _sessionIdSize - _nonceSize - _tagSize);
+  int get maxPlaintextResponseSize => _clampMax(
+      _inner.maxResponseSize - _sessionIdSize - _nonceSize - _tagSize);
 
   Future<Uint8List> send(Uint8List payload, {int timeoutMs = 3000}) async {
     if (payload.length > maxPlaintextRequestSize) {
@@ -56,7 +56,8 @@ class EncryptedDnsClient {
     message.add(nonce);
     message.add(encrypted);
 
-    final respBytes = await _inner.send(message.takeBytes(), timeoutMs: timeoutMs);
+    final respBytes =
+        await _inner.send(message.takeBytes(), timeoutMs: timeoutMs);
     if (respBytes.isEmpty) {
       return Uint8List(0);
     }
@@ -64,7 +65,8 @@ class EncryptedDnsClient {
     final decrypted = await _decryptMessage(respBytes, sessionId, key);
     _sessionLastUsed = DateTime.now();
     if (decrypted.length > maxPlaintextResponseSize) {
-      throw StateError('Response too large: ${decrypted.length} > $maxPlaintextResponseSize');
+      throw StateError(
+          'Response too large: ${decrypted.length} > $maxPlaintextResponseSize');
     }
     return decrypted;
   }
@@ -91,80 +93,63 @@ class EncryptedDnsClient {
     final ed25519 = Ed25519();
     final x25519 = X25519();
 
-    const backoff = [
-      Duration(milliseconds: 200),
-      Duration(milliseconds: 500),
-      Duration(seconds: 1),
-    ];
+    final clientNonce = _randomBytes(_clientNonceSize);
+    final clientKeyPair = await x25519.newKeyPair();
+    final clientPub = await clientKeyPair.extractPublicKey();
+    final clientPubBytes = Uint8List.fromList(clientPub.bytes);
 
-    for (var attempt = 0; attempt < backoff.length; attempt++) {
-      try {
-        final clientNonce = _randomBytes(_clientNonceSize);
-        final clientKeyPair = await x25519.newKeyPair();
-        final clientPub = await clientKeyPair.extractPublicKey();
-        final clientPubBytes = Uint8List.fromList(clientPub.bytes);
+    final req = Uint8List(1 + 1 + _x25519KeySize + _clientNonceSize);
+    req[0] = _version;
+    req[1] = _typeHandshake;
+    req.setRange(2, 2 + _x25519KeySize, clientPubBytes);
+    req.setRange(2 + _x25519KeySize, req.length, clientNonce);
 
-        final req = Uint8List(1 + 1 + _x25519KeySize + _clientNonceSize);
-        req[0] = _version;
-        req[1] = _typeHandshake;
-        req.setRange(2, 2 + _x25519KeySize, clientPubBytes);
-        req.setRange(2 + _x25519KeySize, req.length, clientNonce);
-
-        final resp = await _inner.send(req, timeoutMs: timeoutMs);
-        if (resp.length !=
-            1 + 1 + _sessionIdSize + _x25519KeySize + _signatureSize) {
-          throw StateError('Invalid handshake response length');
-        }
-        if (resp[0] != _version || resp[1] != _typeHandshakeResp) {
-          throw StateError('Invalid handshake response');
-        }
-
-        final sessionId = resp.sublist(2, 2 + _sessionIdSize);
-        final serverPub = resp.sublist(
-            2 + _sessionIdSize, 2 + _sessionIdSize + _x25519KeySize);
-        final signature =
-            resp.sublist(2 + _sessionIdSize + _x25519KeySize);
-
-        final signed = BytesBuilder();
-        signed.addByte(_version);
-        signed.addByte(_typeHandshakeResp);
-        signed.add(sessionId);
-        signed.add(serverPub);
-        signed.add(clientPubBytes);
-        signed.add(clientNonce);
-
-        final ok = await ed25519.verify(
-          signed.takeBytes(),
-          signature: Signature(signature, publicKey: publicKey),
-        );
-        if (!ok) {
-          throw StateError('Invalid server signature');
-        }
-
-        final shared = await x25519.sharedSecretKey(
-          keyPair: clientKeyPair,
-          remotePublicKey:
-              SimplePublicKey(serverPub, type: KeyPairType.x25519),
-        );
-        final derived = await _deriveSessionKey(
-          shared,
-          clientNonce,
-          sessionId,
-          clientPubBytes,
-          serverPub,
-          _keySize,
-        );
-
-        _sessionId = sessionId;
-        _sessionKey = derived;
-        return;
-      } catch (_) {
-        if (attempt == backoff.length - 1) {
-          rethrow;
-        }
-        await Future.delayed(backoff[attempt]);
-      }
+    final resp = await _inner.send(req, timeoutMs: timeoutMs);
+    if (resp.length !=
+        1 + 1 + _sessionIdSize + _x25519KeySize + _signatureSize) {
+      throw StateError('Invalid handshake response length');
     }
+    if (resp[0] != _version || resp[1] != _typeHandshakeResp) {
+      throw StateError('Invalid handshake response');
+    }
+
+    final sessionId = resp.sublist(2, 2 + _sessionIdSize);
+    final serverPub =
+        resp.sublist(2 + _sessionIdSize, 2 + _sessionIdSize + _x25519KeySize);
+    final signature = resp.sublist(2 + _sessionIdSize + _x25519KeySize);
+
+    final signed = BytesBuilder();
+    signed.addByte(_version);
+    signed.addByte(_typeHandshakeResp);
+    signed.add(sessionId);
+    signed.add(serverPub);
+    signed.add(clientPubBytes);
+    signed.add(clientNonce);
+
+    final ok = await ed25519.verify(
+      signed.takeBytes(),
+      signature: Signature(signature, publicKey: publicKey),
+    );
+    if (!ok) {
+      throw StateError('Invalid server signature');
+    }
+
+    final shared = await x25519.sharedSecretKey(
+      keyPair: clientKeyPair,
+      remotePublicKey: SimplePublicKey(serverPub, type: KeyPairType.x25519),
+    );
+    final derived = await _deriveSessionKey(
+      shared,
+      clientNonce,
+      sessionId,
+      clientPubBytes,
+      serverPub,
+      _keySize,
+    );
+
+    _sessionId = sessionId;
+    _sessionKey = derived;
+    return;
   }
 
   Future<Uint8List> _decryptMessage(
@@ -183,8 +168,8 @@ class EncryptedDnsClient {
     return _decrypt(key, nonce, ciphertext, sessionId);
   }
 
-  Future<Uint8List> _encrypt(
-      SecretKey key, Uint8List nonce, Uint8List plaintext, Uint8List aad) async {
+  Future<Uint8List> _encrypt(SecretKey key, Uint8List nonce,
+      Uint8List plaintext, Uint8List aad) async {
     final algo = AesGcm.with256bits();
     final secretBox = await algo.encrypt(
       plaintext,
@@ -195,8 +180,8 @@ class EncryptedDnsClient {
     return Uint8List.fromList(secretBox.cipherText + secretBox.mac.bytes);
   }
 
-  Future<Uint8List> _decrypt(
-      SecretKey key, Uint8List nonce, Uint8List ciphertext, Uint8List aad) async {
+  Future<Uint8List> _decrypt(SecretKey key, Uint8List nonce,
+      Uint8List ciphertext, Uint8List aad) async {
     final algo = AesGcm.with256bits();
     if (ciphertext.length < _tagSize) {
       throw StateError('Ciphertext too short');

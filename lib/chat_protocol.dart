@@ -36,13 +36,11 @@ class DnsChatClient {
   static const int _msgIdSize = 8;
   static const int _offsetSize = 4;
 
-  int get maxRequestBytes =>
-      _clampMax(_channel.maxPlaintextRequestSize -
-          (1 + _msgIdSize + _offsetSize + 4));
+  int get maxRequestBytes => _clampMax(
+      _channel.maxPlaintextRequestSize - (1 + _msgIdSize + _offsetSize + 4));
 
-  int get maxResponseBytes =>
-      _clampMax(_channel.maxPlaintextResponseSize -
-          (1 + _msgIdSize + _offsetSize + 1));
+  int get maxResponseBytes => _clampMax(
+      _channel.maxPlaintextResponseSize - (1 + _msgIdSize + _offsetSize + 1));
 
   Stream<ChatChunk> sendMessage({
     required String apiKey,
@@ -164,49 +162,35 @@ class DnsChatClient {
     var offset = 0;
     final chunks = <_Chunk>[];
     while (offset < data.length) {
-      final end = (offset + maxChunk < data.length) ? offset + maxChunk : data.length;
+      final end =
+          (offset + maxChunk < data.length) ? offset + maxChunk : data.length;
       final chunk = data.sublist(offset, end);
-      await _sendChunkWithRetry(msgId, offset, data.length, chunk);
+      await _sendChunk(msgId, offset, data.length, chunk);
       chunks.add(_Chunk(offset, data.length, chunk));
       offset = end;
     }
     return chunks;
   }
 
-  Future<void> _sendChunkWithRetry(
+  Future<void> _sendChunk(
       Uint8List msgId, int offset, int total, Uint8List chunk) async {
-    const retries = 3;
-    Object? lastError;
-    for (var attempt = 0; attempt < retries; attempt++) {
-      final payload = _buildChunk(msgId, offset, total, chunk);
-      Uint8List resp;
-      try {
-        resp = await _channel.send(payload);
-      } catch (e) {
-        lastError = e;
-        if (_isServFail(e)) {
-          continue;
-        }
-        rethrow;
-      }
-      if (resp.isEmpty) {
-        lastError = StateError('Empty response');
-        continue;
-      }
-      final parsed = _parseResponse(resp);
-      if (parsed is _Ack && parsed.offset == offset) {
-        return;
-      }
-      if (parsed is _ErrorResp) {
-        throw StateError(parsed.message);
-      }
-      lastError = StateError('Unexpected response');
+    final payload = _buildChunk(msgId, offset, total, chunk);
+    final resp = await _channel.send(payload);
+    if (resp.isEmpty) {
+      throw StateError('Empty response');
     }
-    final suffix = lastError != null ? ': $lastError' : '';
-    throw StateError('Failed to send chunk at offset $offset$suffix');
+    final parsed = _parseResponse(resp);
+    if (parsed is _Ack && parsed.offset == offset) {
+      return;
+    }
+    if (parsed is _ErrorResp) {
+      throw StateError(parsed.message);
+    }
+    throw StateError('Unexpected response');
   }
 
-  Uint8List _buildChunk(Uint8List msgId, int offset, int total, Uint8List data) {
+  Uint8List _buildChunk(
+      Uint8List msgId, int offset, int total, Uint8List data) {
     final buffer = BytesBuilder();
     buffer.addByte(_typeChunk);
     buffer.add(msgId);
@@ -236,9 +220,6 @@ class DnsChatClient {
     try {
       resp = await _channel.send(buffer.takeBytes());
     } catch (e) {
-      if (_isServFail(e)) {
-        return _PollPending();
-      }
       rethrow;
     }
     if (resp.isEmpty) {
@@ -273,7 +254,8 @@ class DnsChatClient {
       if (resp.length < 1 + _msgIdSize + 1) {
         return _ErrorResp('Unknown error');
       }
-      final msg = utf8.decode(resp.sublist(1 + _msgIdSize + 1), allowMalformed: true);
+      final msg =
+          utf8.decode(resp.sublist(1 + _msgIdSize + 1), allowMalformed: true);
       return _ErrorResp(msg);
     }
     if (type == _typeMeta) {
@@ -396,9 +378,4 @@ int _clampMax(int value) {
     return 0;
   }
   return value;
-}
-
-bool _isServFail(Object e) {
-  final msg = e.toString();
-  return msg.contains('SERVFAIL') || msg.contains('rcode=2');
 }

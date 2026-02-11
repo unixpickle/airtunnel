@@ -13,9 +13,11 @@ class DnsByteClient {
   final String server;
   final int maxRequestSize;
   final int maxResponseSize;
+  io.RawDatagramSocket? _socket;
+  StreamController<Uint8List>? _incoming;
+  Future<io.RawDatagramSocket>? _socketReady;
 
-  Future<Uint8List> send(Uint8List payload,
-      {int timeoutMs = 3000}) async {
+  Future<Uint8List> send(Uint8List payload, {int timeoutMs = 3000}) async {
     if (payload.length > maxRequestSize) {
       throw ArgumentError(
           'Payload too large: ${payload.length} > $maxRequestSize');
@@ -29,23 +31,89 @@ class DnsByteClient {
     final serverPort = parts.length > 1 ? int.tryParse(parts[1]) ?? 53 : 53;
 
     final serverAddress = await _resolveServer(serverHost);
+    final socket = await _ensureSocket();
 
-    final socket = await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
-    try {
+    const backoff = [
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+    ];
+
+    Object? lastError;
+    for (var attempt = 0; attempt < backoff.length; attempt++) {
       socket.send(query, serverAddress, serverPort);
-      final data = await _receiveWithTimeout(socket, timeoutMs);
-      if (data == null) {
-        return Uint8List(0);
+      final result = await _awaitResponse(queryName, backoff[attempt]);
+      if (result.response != null) {
+        final resp = result.response!;
+        if (resp.length > maxResponseSize) {
+          throw StateError(
+              'Response too large: ${resp.length} > $maxResponseSize');
+        }
+        return resp;
       }
-      final resp = _decodeResponse(data, queryName);
-      if (resp.length > maxResponseSize) {
-        throw StateError(
-            'Response too large: ${resp.length} > $maxResponseSize');
+      if (result.error != null) {
+        lastError = result.error;
       }
-      return resp;
-    } finally {
-      socket.close();
     }
+    if (lastError != null) {
+      throw StateError('DNS request failed: $lastError');
+    }
+    throw StateError('DNS request timed out (no response).');
+  }
+
+  Future<_AwaitResult> _awaitResponse(
+      String expectedName, Duration timeout) async {
+    final completer = Completer<_AwaitResult>();
+    Object? lastError;
+    Timer? timer;
+    late final StreamSubscription sub;
+
+    sub = _incoming!.stream.listen((data) {
+      final decoded = _tryDecodeResponse(data, expectedName);
+      if (decoded.response != null) {
+        if (!completer.isCompleted) {
+          completer.complete(_AwaitResult(response: decoded.response));
+        }
+        return;
+      }
+      if (decoded.error != null) {
+        lastError = decoded.error;
+      }
+    });
+
+    timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(_AwaitResult(error: lastError));
+      }
+    });
+
+    final result = await completer.future;
+    await sub.cancel();
+    timer.cancel();
+    return result;
+  }
+
+  Future<io.RawDatagramSocket> _ensureSocket() async {
+    if (_socket != null) {
+      return _socket!;
+    }
+    _socketReady ??=
+        io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0).then((socket) {
+      _socket = socket;
+      _incoming ??= StreamController<Uint8List>.broadcast();
+      socket.listen((event) {
+        if (event == io.RawSocketEvent.read) {
+          final datagram = socket.receive();
+          if (datagram != null) {
+            _incoming!.add(Uint8List.fromList(datagram.data));
+          }
+        }
+      });
+      return socket;
+    });
+    return _socketReady!;
   }
 }
 
@@ -61,31 +129,11 @@ Future<io.InternetAddress> _resolveServer(String host) async {
   return results.first;
 }
 
-Future<Uint8List?> _receiveWithTimeout(
-    io.RawDatagramSocket socket, int timeoutMs) async {
-  final completer = Completer<Uint8List?>();
-  late final StreamSubscription sub;
-  late final Timer timer;
+class _AwaitResult {
+  _AwaitResult({this.response, this.error});
 
-  sub = socket.listen((event) {
-    if (event == io.RawSocketEvent.read) {
-      final datagram = socket.receive();
-      if (datagram != null && !completer.isCompleted) {
-        completer.complete(Uint8List.fromList(datagram.data));
-      }
-    }
-  });
-
-  timer = Timer(Duration(milliseconds: timeoutMs), () {
-    if (!completer.isCompleted) {
-      completer.complete(null);
-    }
-  });
-
-  final result = await completer.future;
-  await sub.cancel();
-  timer.cancel();
-  return result;
+  final Uint8List? response;
+  final Object? error;
 }
 
 Uint8List _buildQuery(String name) {
@@ -114,14 +162,22 @@ Uint8List _buildQuery(String name) {
   return builder.takeBytes();
 }
 
-Uint8List _decodeResponse(Uint8List data, String expectedName) {
+class _DecodeResult {
+  _DecodeResult({this.response, this.error});
+
+  final Uint8List? response;
+  final Object? error;
+}
+
+_DecodeResult _tryDecodeResponse(Uint8List data, String expectedName) {
   if (data.length < 12) {
-    throw FormatException('DNS response too short');
+    return _DecodeResult(error: 'DNS response too short');
   }
 
   final rcode = data[3] & 0x0f;
   if (rcode != 0) {
-    throw StateError('DNS error: ${_rcodeName(rcode)} (rcode=$rcode)');
+    return _DecodeResult(
+        error: 'DNS error: ${_rcodeName(rcode)} (rcode=$rcode)');
   }
 
   final qdCount = (data[4] << 8) | data[5];
@@ -132,33 +188,41 @@ Uint8List _decodeResponse(Uint8List data, String expectedName) {
     offset = _skipName(data, offset);
     offset += 4;
     if (offset > data.length) {
-      throw FormatException('DNS response truncated');
+      return _DecodeResult(error: 'DNS response truncated');
     }
   }
 
+  var sawMismatch = false;
   for (var i = 0; i < anCount; i++) {
     final name = _readName(data, offset);
     offset = name.nextOffset;
     if (offset + 10 > data.length) {
-      throw FormatException('DNS answer truncated');
+      return _DecodeResult(error: 'DNS answer truncated');
     }
     final type = (data[offset] << 8) | data[offset + 1];
     final rdLength = (data[offset + 8] << 8) | data[offset + 9];
     offset += 10;
     if (offset + rdLength > data.length) {
-      throw FormatException('DNS rdata truncated');
+      return _DecodeResult(error: 'DNS rdata truncated');
     }
 
-    if (type == 16 && name.name == expectedName) {
-      final rdata = data.sublist(offset, offset + rdLength);
-      final text = _parseTxt(rdata);
-      return _decodeBase32(text);
+    if (type == 16) {
+      if (name.name != expectedName) {
+        sawMismatch = true;
+      } else {
+        final rdata = data.sublist(offset, offset + rdLength);
+        final text = _parseTxt(rdata);
+        return _DecodeResult(response: _decodeBase32(text));
+      }
     }
     offset += rdLength;
   }
 
-  throw StateError(
-      'No TXT response (qd=$qdCount an=$anCount name=$expectedName)');
+  if (sawMismatch) {
+    return _DecodeResult(error: 'DNS name mismatch (expected $expectedName)');
+  }
+  return _DecodeResult(
+      error: 'No TXT response (qd=$qdCount an=$anCount name=$expectedName)');
 }
 
 String _rcodeName(int rcode) {
@@ -272,7 +336,8 @@ String _encodeToName(Uint8List data, String root) {
     final end = (i + 63 < encoded.length) ? i + 63 : encoded.length;
     labels.add(encoded.substring(i, end));
   }
-  final rootNorm = root.endsWith('.') ? root.substring(0, root.length - 1) : root;
+  final rootNorm =
+      root.endsWith('.') ? root.substring(0, root.length - 1) : root;
   if (labels.isEmpty) {
     return rootNorm;
   }
@@ -337,7 +402,8 @@ int _maxResponseSize() {
 }
 
 int _maxEncodedChars(String root) {
-  final rootNorm = root.endsWith('.') ? root.substring(0, root.length - 1) : root;
+  final rootNorm =
+      root.endsWith('.') ? root.substring(0, root.length - 1) : root;
   if (rootNorm.isEmpty) {
     return 0;
   }

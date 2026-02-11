@@ -22,13 +22,15 @@ type StreamEvent struct {
 func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 	tools := []map[string]any{
 		{
-			"type":        "function",
-			"name":        "get_time_gmt",
-			"description": "Get the current time in GMT/UTC.",
-			"parameters": map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{},
-				"additionalProperties": false,
+			"type": "function",
+			"function": map[string]any{
+				"name":        "get_time_gmt",
+				"description": "Get the current time in GMT/UTC.",
+				"parameters": map[string]any{
+					"type":                 "object",
+					"properties":           map[string]any{},
+					"additionalProperties": false,
+				},
 			},
 		},
 	}
@@ -179,6 +181,10 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error)
 	case "response.output_text.done":
 		// Do not end the stream here; wait for response.completed or [DONE].
 		log.Printf("openai: output_text done")
+	case "response.output_item.added":
+		if call := extractToolCall(obj); call != nil {
+			return call, nil
+		}
 	case "response.function_call_arguments.done":
 		callID, _ := obj["call_id"].(string)
 		name, _ := obj["name"].(string)
@@ -247,6 +253,28 @@ func extractError(obj map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func extractToolCall(obj map[string]any) *toolCall {
+	item, ok := obj["item"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if itemType, _ := item["type"].(string); itemType != "function_call" {
+		return nil
+	}
+	callID, _ := item["call_id"].(string)
+	name, _ := item["name"].(string)
+	args, _ := item["arguments"].(string)
+	if callID == "" || name == "" {
+		return nil
+	}
+	return &toolCall{
+		ResponseID: extractResponseID(obj),
+		CallID:     callID,
+		Name:       name,
+		Arguments:  args,
+	}
 }
 
 func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onEvent func(StreamEvent)) error {

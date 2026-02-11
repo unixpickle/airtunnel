@@ -304,43 +304,51 @@ func executeTool(name string, args string, cfg toolConfig) (string, error) {
 		}
 		return string(data), nil
 	case "fetch_url":
+		payload := map[string]any{}
 		if cfg.password == "" {
-			return "", errors.New("fetch_url tool disabled")
+			payload["error"] = "fetch_url tool disabled"
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
 		var req struct {
 			URL      string `json:"url"`
 			Password string `json:"password"`
 		}
 		if err := json.Unmarshal([]byte(args), &req); err != nil {
-			return "", errors.New("invalid arguments for fetch_url")
+			payload["error"] = "invalid arguments for fetch_url"
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
 		if subtle.ConstantTimeCompare([]byte(req.Password), []byte(cfg.password)) != 1 {
-			return "", errors.New("invalid password")
+			payload["error"] = "invalid password"
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
 		if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
-			return "", errors.New("unsupported URL scheme")
+			payload["error"] = "unsupported URL scheme"
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
 		client := &http.Client{Timeout: 10 * time.Second}
 		resp, err := client.Get(req.URL)
 		if err != nil {
-			return "", err
+			payload["error"] = err.Error()
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
 		defer resp.Body.Close()
 		const maxBytes = 64 * 1024
 		limited := io.LimitReader(resp.Body, maxBytes)
 		body, err := io.ReadAll(limited)
 		if err != nil {
-			return "", err
+			payload["error"] = err.Error()
+			data, _ := json.Marshal(payload)
+			return string(data), nil
 		}
-		payload := map[string]any{
-			"status":       resp.Status,
-			"content_type": resp.Header.Get("Content-Type"),
-			"body":         string(body),
-		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return "", err
-		}
+		payload["status"] = resp.Status
+		payload["content_type"] = resp.Header.Get("Content-Type")
+		payload["body"] = string(body)
+		data, _ := json.Marshal(payload)
 		return string(data), nil
 	default:
 		return "", errors.New("unknown tool: " + name)

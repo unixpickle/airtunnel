@@ -22,7 +22,14 @@ type StreamEvent struct {
 func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 	tools := []map[string]any{
 		{
-			"type": "function",
+			"type":        "function",
+			"name":        "get_time_gmt",
+			"description": "Get the current time in GMT/UTC.",
+			"parameters": map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
 			"function": map[string]any{
 				"name":        "get_time_gmt",
 				"description": "Get the current time in GMT/UTC.",

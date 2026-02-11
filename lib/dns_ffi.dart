@@ -14,8 +14,7 @@ class DnsByteClient {
   final int maxRequestSize;
   final int maxResponseSize;
 
-  Future<Uint8List> send(Uint8List payload,
-      {int timeoutMs = 3000}) async {
+  Future<Uint8List> send(Uint8List payload, {int timeoutMs = 3000}) async {
     if (payload.length > maxRequestSize) {
       throw ArgumentError(
           'Payload too large: ${payload.length} > $maxRequestSize');
@@ -30,19 +29,27 @@ class DnsByteClient {
 
     final serverAddress = await _resolveServer(serverHost);
 
-    final socket = await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
+    final socket =
+        await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
     try {
-      socket.send(query, serverAddress, serverPort);
-      final data = await _receiveWithTimeout(socket, timeoutMs);
-      if (data == null) {
-        return Uint8List(0);
+      final timeouts = <int>[timeoutMs, 15000];
+      for (var i = 0; i < timeouts.length; i++) {
+        socket.send(query, serverAddress, serverPort);
+        final data = await _receiveWithTimeout(socket, timeouts[i]);
+        if (data == null) {
+          if (i == timeouts.length - 1) {
+            return Uint8List(0);
+          }
+          continue;
+        }
+        final resp = _decodeResponse(data, queryName);
+        if (resp.length > maxResponseSize) {
+          throw StateError(
+              'Response too large: ${resp.length} > $maxResponseSize');
+        }
+        return resp;
       }
-      final resp = _decodeResponse(data, queryName);
-      if (resp.length > maxResponseSize) {
-        throw StateError(
-            'Response too large: ${resp.length} > $maxResponseSize');
-      }
-      return resp;
+      return Uint8List(0);
     } finally {
       socket.close();
     }
@@ -272,7 +279,8 @@ String _encodeToName(Uint8List data, String root) {
     final end = (i + 63 < encoded.length) ? i + 63 : encoded.length;
     labels.add(encoded.substring(i, end));
   }
-  final rootNorm = root.endsWith('.') ? root.substring(0, root.length - 1) : root;
+  final rootNorm =
+      root.endsWith('.') ? root.substring(0, root.length - 1) : root;
   if (labels.isEmpty) {
     return rootNorm;
   }
@@ -337,7 +345,8 @@ int _maxResponseSize() {
 }
 
 int _maxEncodedChars(String root) {
-  final rootNorm = root.endsWith('.') ? root.substring(0, root.length - 1) : root;
+  final rootNorm =
+      root.endsWith('.') ? root.substring(0, root.length - 1) : root;
   if (rootNorm.isEmpty) {
     return 0;
   }

@@ -87,10 +87,6 @@ class DnsChatClient {
         if (DateTime.now().difference(startTime) > const Duration(seconds: 90)) {
           throw StateError('Timed out waiting for response.');
         }
-        if (DateTime.now().difference(lastProgress) > const Duration(seconds: 8)) {
-          await _resendChunks(msgId, chunks);
-          lastProgress = DateTime.now();
-        }
         await Future.delayed(backoff[backoffIndex]);
         if (backoffIndex < backoff.length - 1) {
           backoffIndex++;
@@ -226,16 +222,6 @@ class DnsChatClient {
       await _channel.send(buffer.takeBytes());
     } catch (_) {
       // Best-effort cleanup signal.
-    }
-  }
-
-  Future<void> _resendChunks(Uint8List msgId, List<_Chunk> chunks) async {
-    for (final chunk in chunks) {
-      try {
-        await _sendChunkWithRetry(msgId, chunk.offset, chunk.total, chunk.data);
-      } catch (_) {
-        // Best-effort resend.
-      }
     }
   }
 

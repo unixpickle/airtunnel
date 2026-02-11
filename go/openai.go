@@ -51,7 +51,7 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 		tools = append(tools, map[string]any{
 			"type":        "function",
 			"name":        "fetch_url",
-			"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in.",
+			"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in. You may reuse a previously provided password in the conversation.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -69,7 +69,7 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 			},
 			"function": map[string]any{
 				"name":        "fetch_url",
-				"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in.",
+				"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in. You may reuse a previously provided password in the conversation.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

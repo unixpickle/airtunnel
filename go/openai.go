@@ -20,6 +20,18 @@ type StreamEvent struct {
 }
 
 func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
+	tools := []map[string]any{
+		{
+			"type":        "function",
+			"name":        "get_time_gmt",
+			"description": "Get the current time in GMT/UTC.",
+			"parameters": map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+		},
+	}
 	body := map[string]any{
 		"model": req.Model,
 		"input": []map[string]any{
@@ -30,6 +42,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		},
 		"stream": true,
 		"store":  true,
+		"tools":  tools,
 	}
 	if req.PreviousResponseID != "" {
 		body["previous_response_id"] = req.PreviousResponseID
@@ -53,11 +66,15 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(dataLines) > 0 {
-					if err := handleSSEData(dataLines, onEvent); err != nil {
+					toolCall, err := handleSSEData(dataLines, onEvent)
+					if err != nil {
 						if errors.Is(err, io.EOF) {
 							return nil
 						}
 						return err
+					}
+					if toolCall != nil {
+						return handleToolCall(req, tools, toolCall, onEvent)
 					}
 				}
 				return nil
@@ -67,11 +84,15 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			if len(dataLines) > 0 {
-				if err := handleSSEData(dataLines, onEvent); err != nil {
+				toolCall, err := handleSSEData(dataLines, onEvent)
+				if err != nil {
 					if errors.Is(err, io.EOF) {
 						return nil
 					}
 					return err
+				}
+				if toolCall != nil {
+					return handleToolCall(req, tools, toolCall, onEvent)
 				}
 				dataLines = dataLines[:0]
 			}
@@ -124,15 +145,22 @@ func isPrevResponseNotFound(data []byte) bool {
 	return obj.Error.Code == "previous_response_not_found" || obj.Error.Type == "previous_response_not_found"
 }
 
-func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
+type toolCall struct {
+	ResponseID string
+	CallID     string
+	Name       string
+	Arguments  string
+}
+
+func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error) {
 	data := strings.Join(lines, "\n")
 	if data == "[DONE]" {
 		onEvent(StreamEvent{Done: true})
-		return io.EOF
+		return nil, io.EOF
 	}
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(data), &obj); err != nil {
-		return nil
+		return nil, nil
 	}
 	typeVal, _ := obj["type"].(string)
 	// Capture any response_id present on any event type.
@@ -151,6 +179,18 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 	case "response.output_text.done":
 		// Do not end the stream here; wait for response.completed or [DONE].
 		log.Printf("openai: output_text done")
+	case "response.function_call_arguments.done":
+		callID, _ := obj["call_id"].(string)
+		name, _ := obj["name"].(string)
+		args, _ := obj["arguments"].(string)
+		if callID != "" && name != "" {
+			return &toolCall{
+				ResponseID: extractResponseID(obj),
+				CallID:     callID,
+				Name:       name,
+				Arguments:  args,
+			}, nil
+		}
 	case "response.completed":
 		if id := extractResponseID(obj); id != "" {
 			log.Printf("openai: response completed id=%s", id)
@@ -158,7 +198,7 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 			log.Printf("openai: response completed without id data=%s", truncateLog(data, 500))
 		}
 		onEvent(StreamEvent{Done: true})
-		return io.EOF
+		return nil, io.EOF
 	case "response.failed", "error":
 		errMsg := extractError(obj)
 		if errMsg == "" {
@@ -166,9 +206,9 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 		}
 		log.Printf("openai: error=%s", errMsg)
 		onEvent(StreamEvent{Error: errMsg})
-		return io.EOF
+		return nil, io.EOF
 	}
-	return nil
+	return nil, nil
 }
 
 func truncateLog(s string, max int) string {
@@ -207,4 +247,88 @@ func extractError(obj map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onEvent func(StreamEvent)) error {
+	if call == nil || call.CallID == "" || call.Name == "" {
+		return nil
+	}
+	output, err := executeTool(call.Name, call.Arguments)
+	if err != nil {
+		onEvent(StreamEvent{Error: err.Error()})
+		return nil
+	}
+	body := map[string]any{
+		"model": req.Model,
+		"input": []map[string]any{
+			{
+				"type":    "function_call_output",
+				"call_id": call.CallID,
+				"output":  output,
+			},
+		},
+		"stream": true,
+		"store":  true,
+		"tools":  tools,
+	}
+	if call.ResponseID != "" {
+		body["previous_response_id"] = call.ResponseID
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 0 * time.Second}
+	resp, err := doOpenAIRequest(client, req.APIKey, buf, call.ResponseID != "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	var dataLines []string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(dataLines) > 0 {
+					if _, err := handleSSEData(dataLines, onEvent); err != nil && !errors.Is(err, io.EOF) {
+						return err
+					}
+				}
+				return nil
+			}
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if len(dataLines) > 0 {
+				if _, err := handleSSEData(dataLines, onEvent); err != nil {
+					if errors.Is(err, io.EOF) {
+						return nil
+					}
+					return err
+				}
+				dataLines = dataLines[:0]
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+}
+
+func executeTool(name string, _ string) (string, error) {
+	switch name {
+	case "get_time_gmt":
+		now := time.Now().UTC().Format(time.RFC3339)
+		payload := map[string]string{"utc": now}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	default:
+		return "", errors.New("unknown tool: " + name)
+	}
 }

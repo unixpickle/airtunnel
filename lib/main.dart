@@ -697,6 +697,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   bool _sending = false;
   String? _error;
+  bool _autoScroll = true;
 
   ChatSession get chat => widget.chat;
 
@@ -790,6 +791,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _scrollToBottom() {
+    if (!_autoScroll) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
       _scrollController.animateTo(
@@ -856,29 +858,41 @@ class _ChatScreenState extends State<ChatScreen> {
         body: Column(
           children: [
             Expanded(
-              child: ListView.builder(
-                controller: _scrollController,
-                itemCount: chat.messages.length,
-                itemBuilder: (context, index) {
-                  final msg = chat.messages[index];
-                  final isUser = msg.role == 'user';
-                  return Align(
-                    alignment:
-                        isUser ? Alignment.centerRight : Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(
-                          vertical: 6, horizontal: 8),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: isUser
-                            ? Colors.indigo.shade50
-                            : Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(msg.text),
-                    ),
-                  );
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (!_scrollController.hasClients) {
+                    return false;
+                  }
+                  final position = _scrollController.position;
+                  final atBottom =
+                      position.pixels >= position.maxScrollExtent - 24;
+                  _autoScroll = atBottom;
+                  return false;
                 },
+                child: ListView.builder(
+                  controller: _scrollController,
+                  itemCount: chat.messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = chat.messages[index];
+                    final isUser = msg.role == 'user';
+                    return Align(
+                      alignment:
+                          isUser ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(
+                            vertical: 6, horizontal: 8),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isUser
+                              ? Colors.indigo.shade50
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(msg.text),
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
             if (_error != null)

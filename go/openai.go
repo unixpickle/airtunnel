@@ -293,15 +293,22 @@ func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onE
 		onEvent(StreamEvent{Error: err.Error()})
 		return nil
 	}
-	body := map[string]any{
-		"model": req.Model,
-		"input": []map[string]any{
-			{
-				"type":    "function_call_output",
-				"call_id": call.CallID,
-				"output":  output,
-			},
+	input := []map[string]any{
+		{
+			"type":      "function_call",
+			"call_id":   call.CallID,
+			"name":      call.Name,
+			"arguments": call.Arguments,
 		},
+		{
+			"type":    "function_call_output",
+			"call_id": call.CallID,
+			"output":  output,
+		},
+	}
+	body := map[string]any{
+		"model":  req.Model,
+		"input":  input,
 		"stream": true,
 		"store":  true,
 		"tools":  tools,

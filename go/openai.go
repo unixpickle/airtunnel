@@ -42,7 +42,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		},
 	}
 	client := &http.Client{Timeout: 0 * time.Second}
-	initialBody, err := createResponse(req, tools, false, nil)
+	initialBody, err := createResponse(req, tools, false, nil, req.PreviousResponseID)
 	if err != nil {
 		return err
 	}
@@ -54,7 +54,9 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 	if err := json.Unmarshal(respBytes, &respObj); err != nil {
 		return err
 	}
+	var responseID string
 	if id, ok := respObj["id"].(string); ok && id != "" {
+		responseID = id
 		onEvent(StreamEvent{ResponseID: id})
 	}
 	outputItems, _ := respObj["output"].([]any)
@@ -70,7 +72,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			"call_id": call.CallID,
 			"output":  output,
 		})
-		secondBody, err := createResponse(req, tools, true, input)
+		secondBody, err := createResponse(req, tools, true, input, responseID)
 		if err != nil {
 			return err
 		}
@@ -81,7 +83,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 		onEvent(StreamEvent{Done: true})
 		return nil
 	}
-	streamBody, err := createResponse(req, tools, true, nil)
+	streamBody, err := createResponse(req, tools, true, nil, req.PreviousResponseID)
 	if err != nil {
 		return err
 	}
@@ -258,7 +260,7 @@ func executeTool(name string, _ string) (string, error) {
 	}
 }
 
-func createResponse(req ChatRequest, tools []map[string]any, stream bool, input []any) ([]byte, error) {
+func createResponse(req ChatRequest, tools []map[string]any, stream bool, input []any, prevID string) ([]byte, error) {
 	body := map[string]any{
 		"model":  req.Model,
 		"stream": stream,
@@ -275,8 +277,8 @@ func createResponse(req ChatRequest, tools []map[string]any, stream bool, input 
 			},
 		}
 	}
-	if req.PreviousResponseID != "" {
-		body["previous_response_id"] = req.PreviousResponseID
+	if prevID != "" {
+		body["previous_response_id"] = prevID
 	}
 	return json.Marshal(body)
 }

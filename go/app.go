@@ -40,6 +40,7 @@ type AppServer struct {
 	ttl        time.Duration
 	maxUploads int
 	maxResps   int
+	toolPass   string
 }
 
 type UploadState struct {
@@ -78,7 +79,7 @@ type ChatRequest struct {
 	PreviousResponseID string `json:"previous_response_id"`
 }
 
-func NewAppServer(maxReqSize, maxRespSize int) *AppServer {
+func NewAppServer(maxReqSize, maxRespSize int, toolPass string) *AppServer {
 	respChunk := maxRespSize - headerRespSize
 	if respChunk < 0 {
 		respChunk = 0
@@ -95,6 +96,7 @@ func NewAppServer(maxReqSize, maxRespSize int) *AppServer {
 		ttl:        10 * time.Minute,
 		maxUploads: 1000,
 		maxResps:   1000,
+		toolPass:   toolPass,
 	}
 }
 
@@ -300,7 +302,7 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 	a.enforceRespCapLocked()
 	a.mu.Unlock()
 
-	err := streamOpenAI(req, func(event StreamEvent) {
+	err := streamOpenAI(req, a.toolPass, func(event StreamEvent) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.Updated = time.Now()

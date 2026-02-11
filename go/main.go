@@ -30,9 +30,11 @@ func main() {
 	var root string
 	var addr string
 	var keyPath string
+	var toolPassword string
 	flag.StringVar(&root, "root", "", "root domain (e.g. someserver.google.com)")
 	flag.StringVar(&addr, "addr", ":5353", "listen address")
 	flag.StringVar(&keyPath, "key", "", "ed25519 private key PEM")
+	flag.StringVar(&toolPassword, "tool_password", "", "password for URL tool (empty disables)")
 	flag.Parse()
 
 	if strings.TrimSpace(root) == "" {
@@ -65,7 +67,7 @@ func main() {
 	log.Printf("app_response_chunk_bytes=%d", maxPlainResp-(1+msgIDSize+4+1))
 
 	sessions := NewSessionStore(72*time.Hour, 5000)
-	app := NewAppServer(maxPlainReq, maxPlainResp)
+	app := NewAppServer(maxPlainReq, maxPlainResp, toolPassword)
 	server := &dns.Server{Addr: addr, Net: "udp"}
 	server.Handler = dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 		handleRequest(w, r, root, priv, sessions, app, maxReq, maxResp)

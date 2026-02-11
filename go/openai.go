@@ -19,7 +19,12 @@ type StreamEvent struct {
 	Error      string
 }
 
-func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
+type toolConfig struct {
+	password string
+}
+
+func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) error {
+	cfg := toolConfig{password: toolPass}
 	tools := []map[string]any{
 		{
 			"type":        "function",
@@ -41,6 +46,47 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			},
 		},
 	}
+	if toolPass != "" {
+		tools = append(tools, map[string]any{
+			"type":        "function",
+			"name":        "fetch_url",
+			"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The URL to fetch (http or https).",
+					},
+					"password": map[string]any{
+						"type":        "string",
+						"description": "Password provided by the user.",
+					},
+				},
+				"required":             []string{"url", "password"},
+				"additionalProperties": false,
+			},
+			"function": map[string]any{
+				"name":        "fetch_url",
+				"description": "Fetch the contents of a URL. Do not call this tool until the user tells you what password to pass in.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{
+							"type":        "string",
+							"description": "The URL to fetch (http or https).",
+						},
+						"password": map[string]any{
+							"type":        "string",
+							"description": "Password provided by the user.",
+						},
+					},
+					"required":             []string{"url", "password"},
+					"additionalProperties": false,
+				},
+			},
+		})
+	}
 	client := &http.Client{Timeout: 0 * time.Second}
 	initialBody, err := createResponse(req, tools, false, nil, req.PreviousResponseID)
 	if err != nil {
@@ -61,7 +107,7 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 	}
 	outputItems, _ := respObj["output"].([]any)
 	if call := extractToolCallFromOutput(outputItems); call != nil {
-		output, err := executeTool(call.Name, call.Arguments)
+		output, err := executeTool(call.Name, call.Arguments, cfg)
 		if err != nil {
 			onEvent(StreamEvent{Error: err.Error()})
 			return nil
@@ -246,11 +292,50 @@ func extractToolCall(obj map[string]any) *toolCall {
 	}
 }
 
-func executeTool(name string, _ string) (string, error) {
+func executeTool(name string, args string, cfg toolConfig) (string, error) {
 	switch name {
 	case "get_time_gmt":
 		now := time.Now().UTC().Format(time.RFC3339)
 		payload := map[string]string{"utc": now}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "fetch_url":
+		if cfg.password == "" {
+			return "", errors.New("fetch_url tool disabled")
+		}
+		var req struct {
+			URL      string `json:"url"`
+			Password string `json:"password"`
+		}
+		if err := json.Unmarshal([]byte(args), &req); err != nil {
+			return "", errors.New("invalid arguments for fetch_url")
+		}
+		if req.Password != cfg.password {
+			return "", errors.New("invalid password")
+		}
+		if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+			return "", errors.New("unsupported URL scheme")
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get(req.URL)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		const maxBytes = 64 * 1024
+		limited := io.LimitReader(resp.Body, maxBytes)
+		body, err := io.ReadAll(limited)
+		if err != nil {
+			return "", err
+		}
+		payload := map[string]any{
+			"status":       resp.Status,
+			"content_type": resp.Header.Get("Content-Type"),
+			"body":         string(body),
+		}
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return "", err

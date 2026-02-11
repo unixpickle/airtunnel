@@ -82,12 +82,14 @@ class AppSettings {
     required this.rootDomain,
     required this.server,
     required this.useDiscovery,
+    required this.model,
   });
 
   final String apiKey;
   final String rootDomain;
   final String server;
   final bool useDiscovery;
+  final String model;
 
   bool get isComplete => apiKey.isNotEmpty && rootDomain.isNotEmpty;
 }
@@ -109,6 +111,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
   static const _prefsRoot = 'root_domain';
   static const _prefsServer = 'dns_server';
   static const _prefsServerMode = 'dns_server_mode';
+  static const _prefsModel = 'chat_model';
   static const _prefsChats = 'chat_sessions';
 
   @override
@@ -147,6 +150,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     final apiKey = prefs.getString(_prefsApiKey) ?? '';
     final root = prefs.getString(_prefsRoot) ?? '';
     final server = prefs.getString(_prefsServer) ?? '';
+    final model = prefs.getString(_prefsModel) ?? 'gpt-5.2';
     final mode = prefs.getString(_prefsServerMode) ?? '';
     final useDiscovery = mode.isEmpty ? server.isEmpty : mode == 'discover';
     final rawChats = prefs.getString(_prefsChats);
@@ -165,6 +169,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
         rootDomain: root,
         server: server,
         useDiscovery: useDiscovery,
+        model: model,
       );
       _chats = chats;
       _detectedServers = servers;
@@ -179,6 +184,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     await prefs.setString(_prefsServer, settings.server);
     await prefs.setString(
         _prefsServerMode, settings.useDiscovery ? 'discover' : 'manual');
+    await prefs.setString(_prefsModel, settings.model);
     final prev = _settings;
     final resetConversation = prev != null &&
         (prev.apiKey != settings.apiKey ||
@@ -352,6 +358,7 @@ class _SetupScreenState extends State<SetupScreen> {
   final _serverController = TextEditingController();
   String? _error;
   bool _useDiscovery = true;
+  String _model = 'gpt-5.2';
 
   @override
   void initState() {
@@ -385,6 +392,7 @@ class _SetupScreenState extends State<SetupScreen> {
         rootDomain: root,
         server: _useDiscovery ? '' : server,
         useDiscovery: _useDiscovery,
+        model: _model,
       ),
     );
     if (!mounted) return;
@@ -414,6 +422,25 @@ class _SetupScreenState extends State<SetupScreen> {
               controller: _rootController,
               decoration: const InputDecoration(
                 labelText: 'Root domain',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _model,
+              items: const [
+                DropdownMenuItem(value: 'gpt-5.2', child: Text('GPT-5.2')),
+                DropdownMenuItem(
+                    value: 'gpt-5-mini', child: Text('GPT-5 Mini')),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _model = value;
+                });
+              },
+              decoration: const InputDecoration(
+                labelText: 'Model',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -508,6 +535,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _rootController;
   late final TextEditingController _serverController;
   late bool _useDiscovery;
+  late String _model;
 
   @override
   void initState() {
@@ -516,6 +544,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _rootController = TextEditingController(text: widget.initial.rootDomain);
     _serverController = TextEditingController(text: widget.initial.server);
     _useDiscovery = widget.initial.useDiscovery;
+    _model = widget.initial.model;
     if (_useDiscovery && widget.detectedServers.isNotEmpty) {
       _serverController.text = '${widget.detectedServers.first}:53';
     }
@@ -527,6 +556,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       rootDomain: _rootController.text.trim(),
       server: _useDiscovery ? '' : _serverController.text.trim(),
       useDiscovery: _useDiscovery,
+      model: _model,
     );
   }
 
@@ -562,6 +592,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 controller: _rootController,
                 decoration: const InputDecoration(
                   labelText: 'Root domain',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _model,
+                items: const [
+                  DropdownMenuItem(value: 'gpt-5.2', child: Text('GPT-5.2')),
+                  DropdownMenuItem(
+                      value: 'gpt-5-mini', child: Text('GPT-5 Mini')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _model = value;
+                  });
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Model',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -686,7 +735,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       final stream = client.sendMessage(
         apiKey: widget.settings.apiKey,
-        model: 'gpt-4o-mini',
+        model: widget.settings.model,
         message: text,
         previousResponseId: chat.previousResponseId,
       );

@@ -34,7 +34,7 @@ func main() {
 	flag.StringVar(&root, "root", "", "root domain (e.g. someserver.google.com)")
 	flag.StringVar(&addr, "addr", ":5353", "listen address")
 	flag.StringVar(&keyPath, "key", "", "ed25519 private key PEM")
-	flag.StringVar(&toolPassword, "tool_password", "", "password for URL tool (empty disables)")
+	flag.StringVar(&toolPassword, "tool-pass", "", "password for URL tool (empty disables)")
 	flag.Parse()
 
 	if strings.TrimSpace(root) == "" {

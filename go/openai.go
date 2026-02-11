@@ -108,11 +108,13 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 	}
 	outputItems, _ := respObj["output"].([]any)
 	if call := extractToolCallFromOutput(outputItems); call != nil {
+		log.Printf("openai: tool call name=%s call_id=%s", call.Name, call.CallID)
 		output, err := executeTool(call.Name, call.Arguments, cfg)
 		if err != nil {
 			onEvent(StreamEvent{Error: err.Error()})
 			return nil
 		}
+		log.Printf("openai: tool output ready name=%s", call.Name)
 		input := []any{
 			map[string]any{
 				"type":    "function_call_output",
@@ -124,13 +126,16 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 		if err != nil {
 			return err
 		}
+		log.Printf("openai: streaming tool response")
 		return streamResponse(req, tools, secondBody, onEvent)
 	}
 	if text, ok := respObj["output_text"].(string); ok && text != "" {
+		log.Printf("openai: non-stream output_text len=%d", len(text))
 		onEvent(StreamEvent{Delta: text})
 		onEvent(StreamEvent{Done: true})
 		return nil
 	}
+	log.Printf("openai: streaming response (no tool call)")
 	streamBody, err := createResponse(req, tools, true, nil, req.PreviousResponseID)
 	if err != nil {
 		return err
@@ -207,12 +212,10 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 	case "response.output_text.delta":
 		delta := extractDelta(obj)
 		if delta != "" {
-			log.Printf("openai: delta len=%d", len(delta))
 			onEvent(StreamEvent{Delta: delta})
 		}
 	case "response.output_text.done":
 		// Do not end the stream here; wait for response.completed or [DONE].
-		log.Printf("openai: output_text done")
 	case "response.completed":
 		if id := extractResponseID(obj); id != "" {
 			log.Printf("openai: response completed id=%s", id)

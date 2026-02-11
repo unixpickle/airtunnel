@@ -143,7 +143,6 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 		Txt: []string{encodeBase32(respPayload)},
 	}
 	m.Answer = append(m.Answer, txt)
-	log.Printf("dns: respond len=%d txt_len=%d", len(respPayload), len(txt.Txt[0]))
 	if latencyJitter > 0 {
 		time.Sleep(time.Duration(mathrand.Int63n(int64(latencyJitter) + 1)))
 	}
@@ -152,10 +151,9 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg, root string, priv ed25519.P
 
 func processPayload(payload []byte, priv ed25519.PrivateKey, sessions *SessionStore, app *AppServer) ([]byte, bool) {
 	if len(payload) >= 2 && payload[0] == protoVersion && payload[1] == handshakeRequest {
-		log.Printf("app: handshake request len=%d", len(payload))
+		log.Printf("app: handshake request")
 		return handleHandshake(payload, priv, sessions)
 	}
-	log.Printf("app: encrypted payload len=%d", len(payload))
 	return handleEncrypted(payload, sessions, app)
 }
 
@@ -228,9 +226,7 @@ func handleEncrypted(payload []byte, sessions *SessionStore, app *AppServer) ([]
 		return nil, false
 	}
 
-	if len(plaintext) > 0 {
-		log.Printf("app: decrypted type=%d len=%d session=%s", plaintext[0], len(plaintext), shortHex(id))
-	} else {
+	if len(plaintext) == 0 {
 		log.Printf("app: decrypted empty payload session=%s", shortHex(id))
 	}
 

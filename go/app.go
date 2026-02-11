@@ -179,7 +179,6 @@ func (a *AppServer) handleChunk(sessionID []byte, payload []byte) ([]byte, error
 	a.mu.Unlock()
 
 	if startProcess && completeData != nil {
-		log.Printf("app: received full request total=%d", len(completeData))
 		sidCopy := append([]byte{}, sessionID...)
 		midCopy := append([]byte{}, msgID...)
 		go a.processRequest(sidCopy, midCopy, completeData)
@@ -287,12 +286,10 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		a.setResponseError(sessionID, msgID, "missing api_key or message")
 		return
 	}
-	if req.PreviousResponseID != "" {
-		log.Printf("app: previous_response_id=%s", req.PreviousResponseID)
-	}
 	if req.Model == "" {
 		req.Model = "gpt-4o-mini"
 	}
+	log.Printf("app: completion start msg=%s model=%s prev=%s", shortHex(msgID), req.Model, req.PreviousResponseID)
 
 	key := a.scopedKey(sessionID, msgID)
 	state := &ResponseState{key: key, Updated: time.Now()}
@@ -325,6 +322,7 @@ func (a *AppServer) processRequest(sessionID []byte, msgID []byte, data []byte) 
 		}
 		if event.Done {
 			state.Done = true
+			log.Printf("app: completion done msg=%s bytes=%d error=%v", shortHex(msgID), len(state.Buffer), state.IsError)
 		}
 	})
 	if err != nil {

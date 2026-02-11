@@ -66,12 +66,13 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			onEvent(StreamEvent{Error: err.Error()})
 			return nil
 		}
-		input := append([]any{}, outputItems...)
-		input = append(input, map[string]any{
-			"type":    "function_call_output",
-			"call_id": call.CallID,
-			"output":  output,
-		})
+		input := []any{
+			map[string]any{
+				"type":    "function_call_output",
+				"call_id": call.CallID,
+				"output":  output,
+			},
+		}
 		secondBody, err := createResponse(req, tools, true, input, responseID)
 		if err != nil {
 			return err

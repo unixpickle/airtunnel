@@ -230,6 +230,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
           chat: chat,
           settings: _settings!,
           detectedServers: _detectedServers,
+          onPersist: _saveChats,
         ),
       ),
     );
@@ -685,11 +686,13 @@ class ChatScreen extends StatefulWidget {
     required this.chat,
     required this.settings,
     required this.detectedServers,
+    required this.onPersist,
   });
 
   final ChatSession chat;
   final AppSettings settings;
   final List<String> detectedServers;
+  final Future<void> Function() onPersist;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -723,6 +726,7 @@ class _ChatScreenState extends State<ChatScreen> {
         chat.title = _titleFrom(text);
       }
     });
+    await widget.onPersist();
 
     _inputController.clear();
     _scrollToBottom();
@@ -762,6 +766,7 @@ class _ChatScreenState extends State<ChatScreen> {
               chat.title = _titleFrom(chat.messages.first.text);
             }
           });
+          await widget.onPersist();
           _scrollToBottom();
         }
         if (chunk.done) {
@@ -771,6 +776,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (pendingResponseId != null && pendingResponseId!.isNotEmpty) {
         chat.previousResponseId = pendingResponseId;
       }
+      await widget.onPersist();
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();
@@ -784,11 +790,13 @@ class _ChatScreenState extends State<ChatScreen> {
           _error = 'Send failed: $e';
         });
       }
+      await widget.onPersist();
     } finally {
       if (!mounted) return;
       setState(() {
         _sending = false;
       });
+      await widget.onPersist();
       _scrollToBottom();
     }
   }

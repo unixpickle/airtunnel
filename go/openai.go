@@ -104,7 +104,6 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 	var responseID string
 	if id, ok := respObj["id"].(string); ok && id != "" {
 		responseID = id
-		onEvent(StreamEvent{ResponseID: id})
 	}
 	outputItems, _ := respObj["output"].([]any)
 	if call := extractToolCallFromOutput(outputItems); call != nil {
@@ -130,6 +129,9 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 		return streamResponse(req, tools, secondBody, onEvent)
 	}
 	if text, ok := respObj["output_text"].(string); ok && text != "" {
+		if responseID != "" {
+			onEvent(StreamEvent{ResponseID: responseID})
+		}
 		log.Printf("openai: non-stream output_text len=%d", len(text))
 		onEvent(StreamEvent{Delta: text})
 		onEvent(StreamEvent{Done: true})

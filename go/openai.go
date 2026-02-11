@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -313,7 +314,7 @@ func executeTool(name string, args string, cfg toolConfig) (string, error) {
 		if err := json.Unmarshal([]byte(args), &req); err != nil {
 			return "", errors.New("invalid arguments for fetch_url")
 		}
-		if req.Password != cfg.password {
+		if subtle.ConstantTimeCompare([]byte(req.Password), []byte(cfg.password)) != 1 {
 			return "", errors.New("invalid password")
 		}
 		if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {

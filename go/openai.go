@@ -41,76 +41,48 @@ func streamOpenAI(req ChatRequest, onEvent func(StreamEvent)) error {
 			},
 		},
 	}
-	body := map[string]any{
-		"model": req.Model,
-		"input": []map[string]any{
-			{
-				"role":    "user",
-				"content": req.Message,
-			},
-		},
-		"stream": true,
-		"store":  true,
-		"tools":  tools,
-	}
-	if req.PreviousResponseID != "" {
-		body["previous_response_id"] = req.PreviousResponseID
-	}
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
 	client := &http.Client{Timeout: 0 * time.Second}
-	resp, err := doOpenAIRequest(client, req.APIKey, buf, req.PreviousResponseID != "")
+	initialBody, err := createResponse(req, tools, false, nil)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
-	reader := bufio.NewReader(resp.Body)
-	var dataLines []string
-	for {
-		line, err := reader.ReadString('\n')
+	respBytes, err := doOpenAIRequestBytes(client, req.APIKey, initialBody, req.PreviousResponseID != "")
+	if err != nil {
+		return err
+	}
+	var respObj map[string]any
+	if err := json.Unmarshal(respBytes, &respObj); err != nil {
+		return err
+	}
+	if id, ok := respObj["id"].(string); ok && id != "" {
+		onEvent(StreamEvent{ResponseID: id})
+	}
+	outputItems, _ := respObj["output"].([]any)
+	if call := extractToolCallFromOutput(outputItems); call != nil {
+		output, err := executeTool(call.Name, call.Arguments)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if len(dataLines) > 0 {
-					toolCall, err := handleSSEData(dataLines, onEvent)
-					if err != nil {
-						if errors.Is(err, io.EOF) {
-							return nil
-						}
-						return err
-					}
-					if toolCall != nil {
-						return handleToolCall(req, tools, toolCall, onEvent)
-					}
-				}
-				return nil
-			}
+			onEvent(StreamEvent{Error: err.Error()})
+			return nil
+		}
+		input := append([]any{}, outputItems...)
+		input = append(input, map[string]any{
+			"type":    "function_call_output",
+			"call_id": call.CallID,
+			"output":  output,
+		})
+		secondBody, err := createResponse(req, tools, true, input)
+		if err != nil {
 			return err
 		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			if len(dataLines) > 0 {
-				toolCall, err := handleSSEData(dataLines, onEvent)
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						return nil
-					}
-					return err
-				}
-				if toolCall != nil {
-					return handleToolCall(req, tools, toolCall, onEvent)
-				}
-				dataLines = dataLines[:0]
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		}
+		return streamResponse(req, tools, secondBody, onEvent)
 	}
+	if text, ok := respObj["output_text"].(string); ok && text != "" {
+		onEvent(StreamEvent{Delta: text})
+		onEvent(StreamEvent{Done: true})
+		return nil
+	}
+	onEvent(StreamEvent{Done: true})
+	return nil
 }
 
 func doOpenAIRequest(client *http.Client, apiKey string, body []byte, hadPrev bool) (*http.Response, error) {
@@ -161,15 +133,15 @@ type toolCall struct {
 	Arguments  string
 }
 
-func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error) {
+func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
 	data := strings.Join(lines, "\n")
 	if data == "[DONE]" {
 		onEvent(StreamEvent{Done: true})
-		return nil, io.EOF
+		return io.EOF
 	}
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(data), &obj); err != nil {
-		return nil, nil
+		return nil
 	}
 	typeVal, _ := obj["type"].(string)
 	// Capture any response_id present on any event type.
@@ -188,22 +160,6 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error)
 	case "response.output_text.done":
 		// Do not end the stream here; wait for response.completed or [DONE].
 		log.Printf("openai: output_text done")
-	case "response.output_item.added":
-		if call := extractToolCall(obj); call != nil {
-			return call, nil
-		}
-	case "response.function_call_arguments.done":
-		callID, _ := obj["call_id"].(string)
-		name, _ := obj["name"].(string)
-		args, _ := obj["arguments"].(string)
-		if callID != "" && name != "" {
-			return &toolCall{
-				ResponseID: extractResponseID(obj),
-				CallID:     callID,
-				Name:       name,
-				Arguments:  args,
-			}, nil
-		}
 	case "response.completed":
 		if id := extractResponseID(obj); id != "" {
 			log.Printf("openai: response completed id=%s", id)
@@ -211,7 +167,7 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error)
 			log.Printf("openai: response completed without id data=%s", truncateLog(data, 500))
 		}
 		onEvent(StreamEvent{Done: true})
-		return nil, io.EOF
+		return io.EOF
 	case "response.failed", "error":
 		errMsg := extractError(obj)
 		if errMsg == "" {
@@ -219,9 +175,9 @@ func handleSSEData(lines []string, onEvent func(StreamEvent)) (*toolCall, error)
 		}
 		log.Printf("openai: error=%s", errMsg)
 		onEvent(StreamEvent{Error: errMsg})
-		return nil, io.EOF
+		return io.EOF
 	}
-	return nil, nil
+	return nil
 }
 
 func truncateLog(s string, max int) string {
@@ -284,44 +240,56 @@ func extractToolCall(obj map[string]any) *toolCall {
 	}
 }
 
-func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onEvent func(StreamEvent)) error {
-	if call == nil || call.CallID == "" || call.Name == "" {
-		return nil
+func executeTool(name string, _ string) (string, error) {
+	switch name {
+	case "get_time_gmt":
+		now := time.Now().UTC().Format(time.RFC3339)
+		payload := map[string]string{"utc": now}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	default:
+		return "", errors.New("unknown tool: " + name)
 	}
-	output, err := executeTool(call.Name, call.Arguments)
-	if err != nil {
-		onEvent(StreamEvent{Error: err.Error()})
-		return nil
-	}
-	input := []map[string]any{
-		{
-			"type":      "function_call",
-			"call_id":   call.CallID,
-			"name":      call.Name,
-			"arguments": call.Arguments,
-		},
-		{
-			"type":    "function_call_output",
-			"call_id": call.CallID,
-			"output":  output,
-		},
-	}
+}
+
+func createResponse(req ChatRequest, tools []map[string]any, stream bool, input []any) ([]byte, error) {
 	body := map[string]any{
 		"model":  req.Model,
-		"input":  input,
-		"stream": true,
+		"stream": stream,
 		"store":  true,
 		"tools":  tools,
 	}
-	if call.ResponseID != "" {
-		body["previous_response_id"] = call.ResponseID
+	if input != nil {
+		body["input"] = input
+	} else {
+		body["input"] = []map[string]any{
+			{
+				"role":    "user",
+				"content": req.Message,
+			},
+		}
 	}
-	buf, err := json.Marshal(body)
+	if req.PreviousResponseID != "" {
+		body["previous_response_id"] = req.PreviousResponseID
+	}
+	return json.Marshal(body)
+}
+
+func doOpenAIRequestBytes(client *http.Client, apiKey string, body []byte, hadPrev bool) ([]byte, error) {
+	resp, err := doOpenAIRequest(client, apiKey, body, hadPrev)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+func streamResponse(req ChatRequest, tools []map[string]any, body []byte, onEvent func(StreamEvent)) error {
 	client := &http.Client{Timeout: 0 * time.Second}
-	resp, err := doOpenAIRequest(client, req.APIKey, buf, call.ResponseID != "")
+	resp, err := doOpenAIRequest(client, req.APIKey, body, req.PreviousResponseID != "")
 	if err != nil {
 		return err
 	}
@@ -333,7 +301,7 @@ func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onE
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(dataLines) > 0 {
-					if _, err := handleSSEData(dataLines, onEvent); err != nil && !errors.Is(err, io.EOF) {
+					if err := handleSSEData(dataLines, onEvent); err != nil && !errors.Is(err, io.EOF) {
 						return err
 					}
 				}
@@ -344,7 +312,7 @@ func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onE
 		line = strings.TrimSpace(line)
 		if line == "" {
 			if len(dataLines) > 0 {
-				if _, err := handleSSEData(dataLines, onEvent); err != nil {
+				if err := handleSSEData(dataLines, onEvent); err != nil {
 					if errors.Is(err, io.EOF) {
 						return nil
 					}
@@ -360,17 +328,22 @@ func handleToolCall(req ChatRequest, tools []map[string]any, call *toolCall, onE
 	}
 }
 
-func executeTool(name string, _ string) (string, error) {
-	switch name {
-	case "get_time_gmt":
-		now := time.Now().UTC().Format(time.RFC3339)
-		payload := map[string]string{"utc": now}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return "", err
+func extractToolCallFromOutput(items []any) *toolCall {
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
 		}
-		return string(data), nil
-	default:
-		return "", errors.New("unknown tool: " + name)
+		if typ, _ := obj["type"].(string); typ != "function_call" {
+			continue
+		}
+		callID, _ := obj["call_id"].(string)
+		name, _ := obj["name"].(string)
+		args, _ := obj["arguments"].(string)
+		if callID == "" || name == "" {
+			continue
+		}
+		return &toolCall{CallID: callID, Name: name, Arguments: args}
 	}
+	return nil
 }

@@ -862,6 +862,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 setState(() {
                   chat.title = name;
                 });
+                await widget.onPersist();
               },
             ),
           ],

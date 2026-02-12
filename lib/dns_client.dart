@@ -26,9 +26,9 @@ class DnsByteClient {
     final queryName = _encodeToName(payload, rootDomain);
     final query = _buildQuery(queryName);
 
-    final parts = server.split(':');
-    final serverHost = parts.first;
-    final serverPort = parts.length > 1 ? int.tryParse(parts[1]) ?? 53 : 53;
+    final parsed = _parseServer(server);
+    final serverHost = parsed.host;
+    final serverPort = parsed.port;
 
     final serverAddress = await _resolveServer(serverHost);
     final socket = await _ensureSocket();
@@ -115,6 +115,39 @@ class DnsByteClient {
     });
     return _socketReady!;
   }
+}
+
+class _ParsedServer {
+  _ParsedServer(this.host, this.port);
+
+  final String host;
+  final int port;
+}
+
+_ParsedServer _parseServer(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return _ParsedServer('1.1.1.1', 53);
+  }
+  if (trimmed.startsWith('[')) {
+    final end = trimmed.indexOf(']');
+    if (end > 0) {
+      final host = trimmed.substring(1, end);
+      var port = 53;
+      if (end + 1 < trimmed.length && trimmed[end + 1] == ':') {
+        port = int.tryParse(trimmed.substring(end + 2)) ?? 53;
+      }
+      return _ParsedServer(host, port);
+    }
+  }
+  final first = trimmed.indexOf(':');
+  final last = trimmed.lastIndexOf(':');
+  if (first != -1 && first == last) {
+    final host = trimmed.substring(0, first);
+    final port = int.tryParse(trimmed.substring(first + 1)) ?? 53;
+    return _ParsedServer(host, port);
+  }
+  return _ParsedServer(trimmed, 53);
 }
 
 Future<io.InternetAddress> _resolveServer(String host) async {

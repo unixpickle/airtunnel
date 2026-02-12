@@ -11,5 +11,27 @@ dependencies:
   cryptography: ^2.7.0
   shared_preferences: ^2.2.3
 
+dev_dependencies:
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  image_path: "icon.png"
+  android: true
+  ios: true
+  macos:
+    generate: true
+    image_path: "icon.png"
+  windows:
+    generate: true
+    image_path: "icon.png"
+  linux:
+    generate: true
+    image_path: "icon.png"
+  web:
+    generate: true
+    image_path: "icon.png"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
+
 flutter:
   uses-material-design: true

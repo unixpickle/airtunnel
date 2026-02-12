@@ -13,9 +13,11 @@ class DnsByteClient {
   final String server;
   final int maxRequestSize;
   final int maxResponseSize;
-  io.RawDatagramSocket? _socket;
+  io.RawDatagramSocket? _socket4;
+  io.RawDatagramSocket? _socket6;
   StreamController<Uint8List>? _incoming;
-  Future<io.RawDatagramSocket>? _socketReady;
+  Future<io.RawDatagramSocket>? _socketReady4;
+  Future<io.RawDatagramSocket>? _socketReady6;
 
   Future<Uint8List> send(Uint8List payload, {int timeoutMs = 3000}) async {
     if (payload.length > maxRequestSize) {
@@ -31,7 +33,7 @@ class DnsByteClient {
     final serverPort = parsed.port;
 
     final serverAddress = await _resolveServer(serverHost);
-    final socket = await _ensureSocket();
+    final socket = await _ensureSocketFor(serverAddress);
 
     const backoff = [
       Duration(seconds: 1),
@@ -95,14 +97,35 @@ class DnsByteClient {
     return result;
   }
 
-  Future<io.RawDatagramSocket> _ensureSocket() async {
-    if (_socket != null) {
-      return _socket!;
+  Future<io.RawDatagramSocket> _ensureSocketFor(
+      io.InternetAddress address) async {
+    _incoming ??= StreamController<Uint8List>.broadcast();
+    if (address.type == io.InternetAddressType.IPv6) {
+      if (_socket6 != null) {
+        return _socket6!;
+      }
+      _socketReady6 ??=
+          io.RawDatagramSocket.bind(io.InternetAddress.anyIPv6, 0, v6Only: true)
+              .then((socket) {
+        _socket6 = socket;
+        socket.listen((event) {
+          if (event == io.RawSocketEvent.read) {
+            final datagram = socket.receive();
+            if (datagram != null) {
+              _incoming!.add(Uint8List.fromList(datagram.data));
+            }
+          }
+        });
+        return socket;
+      });
+      return _socketReady6!;
     }
-    _socketReady ??=
+    if (_socket4 != null) {
+      return _socket4!;
+    }
+    _socketReady4 ??=
         io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0).then((socket) {
-      _socket = socket;
-      _incoming ??= StreamController<Uint8List>.broadcast();
+      _socket4 = socket;
       socket.listen((event) {
         if (event == io.RawSocketEvent.read) {
           final datagram = socket.receive();
@@ -113,7 +136,7 @@ class DnsByteClient {
       });
       return socket;
     });
-    return _socketReady!;
+    return _socketReady4!;
   }
 }
 

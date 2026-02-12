@@ -911,7 +911,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               : Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Text(msg.text),
+                        child: SelectionArea(
+                          child: SelectableText(msg.text),
+                        ),
                       ),
                     );
                   },

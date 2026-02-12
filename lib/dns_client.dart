@@ -104,9 +104,8 @@ class DnsByteClient {
       if (_socket6 != null) {
         return _socket6!;
       }
-      _socketReady6 ??=
-          io.RawDatagramSocket.bind(io.InternetAddress.anyIPv6, 0, v6Only: true)
-              .then((socket) {
+      _socketReady6 ??= io.RawDatagramSocket.bind(io.InternetAddress.anyIPv6, 0)
+          .then((socket) {
         _socket6 = socket;
         socket.listen((event) {
           if (event == io.RawSocketEvent.read) {

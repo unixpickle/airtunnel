@@ -368,7 +368,7 @@ class _SetupScreenState extends State<SetupScreen> {
   void initState() {
     super.initState();
     if (widget.detectedServers.isNotEmpty) {
-      _serverController.text = '${widget.detectedServers.first}:53';
+      _serverController.text = _formatServer(widget.detectedServers.first);
     } else {
       _useDiscovery = false;
     }
@@ -470,7 +470,7 @@ class _SetupScreenState extends State<SetupScreen> {
                         if (_useDiscovery &&
                             widget.detectedServers.isNotEmpty) {
                           _serverController.text =
-                              '${widget.detectedServers.first}:53';
+                              _formatServer(widget.detectedServers.first);
                         }
                       });
                     },
@@ -557,7 +557,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _useDiscovery = widget.initial.useDiscovery;
     _model = widget.initial.model;
     if (_useDiscovery && widget.detectedServers.isNotEmpty) {
-      _serverController.text = '${widget.detectedServers.first}:53';
+      _serverController.text = _formatServer(widget.detectedServers.first);
     }
   }
 
@@ -647,7 +647,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (_useDiscovery &&
                               widget.detectedServers.isNotEmpty) {
                             _serverController.text =
-                                '${widget.detectedServers.first}:53';
+                                _formatServer(widget.detectedServers.first);
                           }
                         });
                       },
@@ -752,7 +752,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final chosenServer = widget.settings.useDiscovery
         ? (widget.detectedServers.isNotEmpty
-            ? '${widget.detectedServers.first}:53'
+            ? _formatServer(widget.detectedServers.first)
             : '1.1.1.1:53')
         : widget.settings.server;
 
@@ -988,4 +988,18 @@ String _titleFrom(String message) {
   if (words.isEmpty) return 'Chat';
   final take = words.length > 6 ? 6 : words.length;
   return words.take(take).join(' ');
+}
+
+String _formatServer(String host) {
+  final trimmed = host.trim();
+  if (trimmed.isEmpty) {
+    return '1.1.1.1:53';
+  }
+  if (trimmed.contains(':')) {
+    if (trimmed.startsWith('[')) {
+      return trimmed.contains(']:') ? trimmed : '$trimmed:53';
+    }
+    return '[$trimmed]:53';
+  }
+  return '$trimmed:53';
 }

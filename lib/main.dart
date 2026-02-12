@@ -496,6 +496,13 @@ class _SetupScreenState extends State<SetupScreen> {
               ),
             ),
             const SizedBox(height: 8),
+            if (widget.detectedServers.isEmpty)
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Auto-discovery is unavailable. This can happen with Private DNS, VPNs, or when the device has no active network yet.',
+                ),
+              ),
             if (widget.detectedServers.isNotEmpty)
               Align(
                 alignment: Alignment.centerLeft,
@@ -666,6 +673,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               const SizedBox(height: 8),
+              if (widget.detectedServers.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Auto-discovery is unavailable. This can happen with Private DNS, VPNs, or when the device has no active network yet.',
+                  ),
+                ),
               if (widget.detectedServers.isNotEmpty)
                 Align(
                   alignment: Alignment.centerLeft,

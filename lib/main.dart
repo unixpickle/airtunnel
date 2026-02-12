@@ -704,6 +704,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   String? _error;
   bool _autoScroll = true;
+  DnsChatClient? _client;
+  String? _clientRoot;
+  String? _clientServer;
 
   ChatSession get chat => widget.chat;
 
@@ -740,10 +743,7 @@ class _ChatScreenState extends State<ChatScreen> {
         : widget.settings.server;
 
     try {
-      final client = DnsChatClient(
-        rootDomain: widget.settings.rootDomain,
-        server: chosenServer,
-      );
+      final client = _getClient(widget.settings.rootDomain, chosenServer);
       final stream = client.sendMessage(
         apiKey: widget.settings.apiKey,
         model: widget.settings.model,
@@ -799,6 +799,17 @@ class _ChatScreenState extends State<ChatScreen> {
       await widget.onPersist();
       _scrollToBottom();
     }
+  }
+
+  DnsChatClient _getClient(String rootDomain, String server) {
+    if (_client == null ||
+        _clientRoot != rootDomain ||
+        _clientServer != server) {
+      _client = DnsChatClient(rootDomain: rootDomain, server: server);
+      _clientRoot = rootDomain;
+      _clientServer = server;
+    }
+    return _client!;
   }
 
   void _scrollToBottom() {

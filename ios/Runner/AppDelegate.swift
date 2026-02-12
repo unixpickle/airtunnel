@@ -1,5 +1,4 @@
 import Flutter
-import SystemConfiguration
 import UIKit
 
 @main
@@ -25,11 +24,6 @@ import UIKit
   }
 
   private func getDnsServers() -> [String] {
-    if let value = SCDynamicStoreCopyValue(nil, "State:/Network/Global/DNS" as CFString),
-       let dict = value as? [String: Any],
-       let servers = dict["ServerAddresses"] as? [String] {
-      return servers
-    }
-    return []
+    return DNSServers() as? [String] ?? []
   }
 }

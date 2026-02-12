@@ -1,5 +1,5 @@
 import Flutter
-import Network
+import SystemConfiguration
 import UIKit
 
 @main
@@ -25,18 +25,9 @@ import UIKit
   }
 
   private func getDnsServers() -> [String] {
-    if #available(iOS 14.0, *) {
-      let monitor = NWPathMonitor()
-      let queue = DispatchQueue(label: "dns.server.monitor")
-      var servers: [String] = []
-      let sem = DispatchSemaphore(value: 0)
-      monitor.pathUpdateHandler = { path in
-        servers = path.dnsServers
-        sem.signal()
-        monitor.cancel()
-      }
-      monitor.start(queue: queue)
-      _ = sem.wait(timeout: .now() + 1.0)
+    if let value = SCDynamicStoreCopyValue(nil, "State:/Network/Global/DNS" as CFString),
+       let dict = value as? [String: Any],
+       let servers = dict["ServerAddresses"] as? [String] {
       return servers
     }
     return []

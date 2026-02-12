@@ -306,7 +306,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DNS Chats'),
+        title: const Text('AirTunnel'),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),

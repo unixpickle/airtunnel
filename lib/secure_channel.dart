@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-import 'dns_ffi.dart';
+import 'dns_client.dart';
 import 'public_key.dart';
 
 class EncryptedDnsClient {

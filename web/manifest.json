@@ -1,6 +1,6 @@
 {
-    "name": "airtunnel_scaffold",
-    "short_name": "airtunnel_scaffold",
+    "name": "AirTunnel",
+    "short_name": "AirTunnel",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",

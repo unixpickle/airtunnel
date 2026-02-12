@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "airtunnel_scaffold" "\0"
+            VALUE "FileDescription", "AirTunnel" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "airtunnel_scaffold" "\0"
+            VALUE "InternalName", "AirTunnel" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "airtunnel_scaffold.exe" "\0"
-            VALUE "ProductName", "airtunnel_scaffold" "\0"
+            VALUE "OriginalFilename", "AirTunnel.exe" "\0"
+            VALUE "ProductName", "AirTunnel" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

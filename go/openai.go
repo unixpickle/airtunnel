@@ -381,11 +381,20 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 				call.Name = name
 			}
 			if args, _ := item["arguments"].(string); args != "" {
-				call.Arguments = args
+				if typeVal == "response.output_item.delta" {
+					call.Arguments += args
+				} else {
+					call.Arguments = args
+				}
 			}
 		case "response.function_call_arguments.delta":
 			callID, _ := obj["call_id"].(string)
 			delta := extractDelta(obj)
+			if delta == "" {
+				if args, _ := obj["arguments"].(string); args != "" {
+					delta = args
+				}
+			}
 			if callID != "" && delta != "" {
 				call := callMap[callID]
 				if call == nil {
@@ -448,6 +457,9 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 		call := callMap[id]
 		if call == nil || call.Name == "" {
 			continue
+		}
+		if call.Arguments == "" {
+			log.Printf("openai: tool call %s missing arguments", call.Name)
 		}
 		result.ToolCalls = append(result.ToolCalls, *call)
 	}

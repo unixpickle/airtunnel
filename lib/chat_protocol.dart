@@ -117,6 +117,7 @@ class DnsChatClient {
         nextOffset += response.data.length;
         if (response.done) {
           if (sawError) {
+            await _sendDone(msgId);
             throw StateError(errorBuffer.toString().trim().isEmpty
                 ? 'Server error'
                 : errorBuffer.toString());
@@ -124,8 +125,6 @@ class DnsChatClient {
           if (!sawDelta) {
             throw StateError('No response text received.');
           }
-          await _sendDone(msgId);
-          yield ChatChunk(done: true);
           break;
         }
       }
@@ -136,6 +135,8 @@ class DnsChatClient {
         yield ChatChunk(responseId: responseId);
       }
     }
+    await _sendDone(msgId);
+    yield ChatChunk(done: true);
   }
 
   Uint8List _buildRequestJson({

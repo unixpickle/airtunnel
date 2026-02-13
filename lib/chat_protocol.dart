@@ -285,20 +285,10 @@ class DnsChatClient {
   }
 
   Future<String> _fetchResponseId(Uint8List msgId) async {
-    const backoff = [
-      Duration(milliseconds: 500),
-      Duration(seconds: 2),
-      Duration(seconds: 5),
-    ];
-    var backoffIndex = 0;
     while (true) {
       final resp = await _requestMeta(msgId);
       if (resp.isNotEmpty) {
         return resp;
-      }
-      await Future.delayed(backoff[backoffIndex]);
-      if (backoffIndex < backoff.length - 1) {
-        backoffIndex++;
       }
     }
   }

@@ -349,6 +349,27 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 			result.ResponseID = id
 		}
 		typeVal, _ := obj["type"].(string)
+		addOrUpdateCall := func(callID string, name string, args string, appendArgs bool) {
+			if callID == "" {
+				return
+			}
+			call := callMap[callID]
+			if call == nil {
+				call = &toolCall{CallID: callID}
+				callMap[callID] = call
+				callOrder = append(callOrder, callID)
+			}
+			if name != "" {
+				call.Name = name
+			}
+			if args != "" {
+				if appendArgs {
+					call.Arguments += args
+				} else {
+					call.Arguments = args
+				}
+			}
+		}
 		switch typeVal {
 		case "response.created":
 			log.Printf("openai: response created")
@@ -359,7 +380,7 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 			}
 		case "response.output_text.done":
 			// wait for response.completed
-		case "response.output_item.added", "response.output_item.delta":
+		case "response.output_item.added", "response.output_item.delta", "response.output_item.done":
 			item, ok := obj["item"].(map[string]any)
 			if !ok {
 				return false
@@ -368,41 +389,31 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 				return false
 			}
 			callID, _ := item["call_id"].(string)
-			if callID == "" {
-				return false
-			}
-			call := callMap[callID]
-			if call == nil {
-				call = &toolCall{CallID: callID}
-				callMap[callID] = call
-				callOrder = append(callOrder, callID)
-			}
 			if name, _ := item["name"].(string); name != "" {
-				call.Name = name
+				addOrUpdateCall(callID, name, "", false)
 			}
 			if args, _ := item["arguments"].(string); args != "" {
-				if typeVal == "response.output_item.delta" {
-					call.Arguments += args
-				} else {
-					call.Arguments = args
-				}
+				addOrUpdateCall(callID, "", args, typeVal == "response.output_item.delta")
 			}
 		case "response.function_call_arguments.delta":
 			callID, _ := obj["call_id"].(string)
+			if callID == "" {
+				callID, _ = obj["item_id"].(string)
+			}
 			delta := extractDelta(obj)
 			if delta == "" {
 				if args, _ := obj["arguments"].(string); args != "" {
 					delta = args
 				}
 			}
-			if callID != "" && delta != "" {
-				call := callMap[callID]
-				if call == nil {
-					call = &toolCall{CallID: callID}
-					callMap[callID] = call
-					callOrder = append(callOrder, callID)
-				}
-				call.Arguments += delta
+			addOrUpdateCall(callID, "", delta, true)
+		case "response.function_call_arguments.done":
+			callID, _ := obj["call_id"].(string)
+			if callID == "" {
+				callID, _ = obj["item_id"].(string)
+			}
+			if args, _ := obj["arguments"].(string); args != "" {
+				addOrUpdateCall(callID, "", args, false)
 			}
 		case "response.completed":
 			if id := extractResponseID(obj); id != "" {
@@ -460,6 +471,8 @@ func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, on
 		}
 		if call.Arguments == "" {
 			log.Printf("openai: tool call %s missing arguments", call.Name)
+			result.Error = "tool call missing arguments"
+			return result, nil
 		}
 		result.ToolCalls = append(result.ToolCalls, *call)
 	}

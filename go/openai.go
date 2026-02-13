@@ -88,61 +88,70 @@ func streamOpenAI(req ChatRequest, toolPass string, onEvent func(StreamEvent)) e
 			},
 		})
 	}
-	client := &http.Client{Timeout: 0 * time.Second}
-	initialBody, err := createResponse(req, tools, false, nil, req.PreviousResponseID)
-	if err != nil {
-		return err
-	}
-	respBytes, err := doOpenAIRequestBytes(client, req.APIKey, initialBody, req.PreviousResponseID != "")
-	if err != nil {
-		return err
-	}
-	var respObj map[string]any
-	if err := json.Unmarshal(respBytes, &respObj); err != nil {
-		return err
-	}
-	var responseID string
-	if id, ok := respObj["id"].(string); ok && id != "" {
-		responseID = id
-	}
-	outputItems, _ := respObj["output"].([]any)
-	if call := extractToolCallFromOutput(outputItems); call != nil {
-		log.Printf("openai: tool call name=%s call_id=%s", call.Name, call.CallID)
-		output, err := executeTool(call.Name, call.Arguments, cfg)
-		if err != nil {
-			onEvent(StreamEvent{Error: err.Error()})
-			return nil
-		}
-		log.Printf("openai: tool output ready name=%s", call.Name)
-		input := []any{
-			map[string]any{
-				"type":    "function_call_output",
-				"call_id": call.CallID,
-				"output":  output,
-			},
-		}
-		secondBody, err := createResponse(req, tools, true, input, responseID)
+	prevID := req.PreviousResponseID
+	for {
+		streamBody, err := createResponse(req, tools, true, nil, prevID)
 		if err != nil {
 			return err
 		}
-		log.Printf("openai: streaming tool response")
-		return streamResponse(req, tools, secondBody, onEvent)
-	}
-	if text, ok := respObj["output_text"].(string); ok && text != "" {
-		if responseID != "" {
-			onEvent(StreamEvent{ResponseID: responseID})
+		result, err := streamResponseOnce(req, tools, streamBody, onEvent)
+		if err != nil {
+			return err
 		}
-		log.Printf("openai: non-stream output_text len=%d", len(text))
-		onEvent(StreamEvent{Delta: text})
-		onEvent(StreamEvent{Done: true})
-		return nil
+		if result.Error != "" {
+			onEvent(StreamEvent{Error: result.Error})
+			return nil
+		}
+		if len(result.ToolCalls) == 0 {
+			if result.ResponseID != "" {
+				onEvent(StreamEvent{ResponseID: result.ResponseID})
+			}
+			onEvent(StreamEvent{Done: true})
+			return nil
+		}
+		if result.ResponseID == "" {
+			return errors.New("openai response missing id for tool call")
+		}
+		input := make([]any, 0, len(result.ToolCalls))
+		for _, call := range result.ToolCalls {
+			log.Printf("openai: tool call name=%s call_id=%s", call.Name, call.CallID)
+			output, err := executeTool(call.Name, call.Arguments, cfg)
+			if err != nil {
+				onEvent(StreamEvent{Error: err.Error()})
+				return nil
+			}
+			log.Printf("openai: tool output ready name=%s", call.Name)
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": call.CallID,
+				"output":  output,
+			})
+		}
+		log.Printf("openai: streaming tool response")
+		prevID = result.ResponseID
+		req.PreviousResponseID = prevID
+		toolBody, err := createResponse(req, tools, true, input, prevID)
+		if err != nil {
+			return err
+		}
+		result, err = streamResponseOnce(req, tools, toolBody, onEvent)
+		if err != nil {
+			return err
+		}
+		if result.Error != "" {
+			onEvent(StreamEvent{Error: result.Error})
+			return nil
+		}
+		if len(result.ToolCalls) == 0 {
+			if result.ResponseID != "" {
+				onEvent(StreamEvent{ResponseID: result.ResponseID})
+			}
+			onEvent(StreamEvent{Done: true})
+			return nil
+		}
+		prevID = result.ResponseID
+		req.PreviousResponseID = prevID
 	}
-	log.Printf("openai: streaming response (no tool call)")
-	streamBody, err := createResponse(req, tools, true, nil, req.PreviousResponseID)
-	if err != nil {
-		return err
-	}
-	return streamResponse(req, tools, streamBody, onEvent)
 }
 
 func doOpenAIRequest(client *http.Client, apiKey string, body []byte, hadPrev bool) (*http.Response, error) {
@@ -187,55 +196,15 @@ func isPrevResponseNotFound(data []byte) bool {
 }
 
 type toolCall struct {
-	ResponseID string
-	CallID     string
-	Name       string
-	Arguments  string
+	CallID    string
+	Name      string
+	Arguments string
 }
 
-func handleSSEData(lines []string, onEvent func(StreamEvent)) error {
-	data := strings.Join(lines, "\n")
-	if data == "[DONE]" {
-		onEvent(StreamEvent{Done: true})
-		return io.EOF
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(data), &obj); err != nil {
-		return nil
-	}
-	typeVal, _ := obj["type"].(string)
-	// Capture any response_id present on any event type.
-	if id := extractResponseID(obj); id != "" {
-		onEvent(StreamEvent{ResponseID: id})
-	}
-	switch typeVal {
-	case "response.created":
-		log.Printf("openai: response created")
-	case "response.output_text.delta":
-		delta := extractDelta(obj)
-		if delta != "" {
-			onEvent(StreamEvent{Delta: delta})
-		}
-	case "response.output_text.done":
-		// Do not end the stream here; wait for response.completed or [DONE].
-	case "response.completed":
-		if id := extractResponseID(obj); id != "" {
-			log.Printf("openai: response completed id=%s", id)
-		} else {
-			log.Printf("openai: response completed without id data=%s", truncateLog(data, 500))
-		}
-		onEvent(StreamEvent{Done: true})
-		return io.EOF
-	case "response.failed", "error":
-		errMsg := extractError(obj)
-		if errMsg == "" {
-			errMsg = "openai error"
-		}
-		log.Printf("openai: error=%s", errMsg)
-		onEvent(StreamEvent{Error: errMsg})
-		return io.EOF
-	}
-	return nil
+type streamResult struct {
+	ResponseID string
+	ToolCalls  []toolCall
+	Error      string
 }
 
 func truncateLog(s string, max int) string {
@@ -274,28 +243,6 @@ func extractError(obj map[string]any) string {
 		}
 	}
 	return ""
-}
-
-func extractToolCall(obj map[string]any) *toolCall {
-	item, ok := obj["item"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	if itemType, _ := item["type"].(string); itemType != "function_call" {
-		return nil
-	}
-	callID, _ := item["call_id"].(string)
-	name, _ := item["name"].(string)
-	args, _ := item["arguments"].(string)
-	if callID == "" || name == "" {
-		return nil
-	}
-	return &toolCall{
-		ResponseID: extractResponseID(obj),
-		CallID:     callID,
-		Name:       name,
-		Arguments:  args,
-	}
 }
 
 func executeTool(name string, args string, cfg toolConfig) (string, error) {
@@ -383,47 +330,112 @@ func createResponse(req ChatRequest, tools []map[string]any, stream bool, input 
 	return json.Marshal(body)
 }
 
-func doOpenAIRequestBytes(client *http.Client, apiKey string, body []byte, hadPrev bool) ([]byte, error) {
-	resp, err := doOpenAIRequest(client, apiKey, body, hadPrev)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-func streamResponse(req ChatRequest, tools []map[string]any, body []byte, onEvent func(StreamEvent)) error {
+func streamResponseOnce(req ChatRequest, tools []map[string]any, body []byte, onEvent func(StreamEvent)) (streamResult, error) {
 	client := &http.Client{Timeout: 0 * time.Second}
 	resp, err := doOpenAIRequest(client, req.APIKey, body, req.PreviousResponseID != "")
 	if err != nil {
-		return err
+		return streamResult{}, err
 	}
 	defer resp.Body.Close()
+
 	reader := bufio.NewReader(resp.Body)
 	var dataLines []string
+	result := streamResult{}
+	callOrder := []string{}
+	callMap := map[string]*toolCall{}
+
+	handleEvent := func(obj map[string]any) bool {
+		if id := extractResponseID(obj); id != "" {
+			result.ResponseID = id
+		}
+		typeVal, _ := obj["type"].(string)
+		switch typeVal {
+		case "response.created":
+			log.Printf("openai: response created")
+		case "response.output_text.delta":
+			delta := extractDelta(obj)
+			if delta != "" {
+				onEvent(StreamEvent{Delta: delta})
+			}
+		case "response.output_text.done":
+			// wait for response.completed
+		case "response.output_item.added", "response.output_item.delta":
+			item, ok := obj["item"].(map[string]any)
+			if !ok {
+				return false
+			}
+			if itemType, _ := item["type"].(string); itemType != "function_call" {
+				return false
+			}
+			callID, _ := item["call_id"].(string)
+			if callID == "" {
+				return false
+			}
+			call := callMap[callID]
+			if call == nil {
+				call = &toolCall{CallID: callID}
+				callMap[callID] = call
+				callOrder = append(callOrder, callID)
+			}
+			if name, _ := item["name"].(string); name != "" {
+				call.Name = name
+			}
+			if args, _ := item["arguments"].(string); args != "" {
+				call.Arguments = args
+			}
+		case "response.function_call_arguments.delta":
+			callID, _ := obj["call_id"].(string)
+			delta := extractDelta(obj)
+			if callID != "" && delta != "" {
+				call := callMap[callID]
+				if call == nil {
+					call = &toolCall{CallID: callID}
+					callMap[callID] = call
+					callOrder = append(callOrder, callID)
+				}
+				call.Arguments += delta
+			}
+		case "response.completed":
+			if id := extractResponseID(obj); id != "" {
+				log.Printf("openai: response completed id=%s", id)
+			} else {
+				log.Printf("openai: response completed without id data=%s", truncateLog(stringify(obj), 500))
+			}
+			return true
+		case "response.failed", "error":
+			errMsg := extractError(obj)
+			if errMsg == "" {
+				errMsg = "openai error"
+			}
+			log.Printf("openai: error=%s", errMsg)
+			result.Error = errMsg
+			return true
+		}
+		return false
+	}
+
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				if len(dataLines) > 0 {
-					if err := handleSSEData(dataLines, onEvent); err != nil && !errors.Is(err, io.EOF) {
-						return err
-					}
-				}
-				return nil
+				break
 			}
-			return err
+			return result, err
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
 			if len(dataLines) > 0 {
-				if err := handleSSEData(dataLines, onEvent); err != nil {
-					if errors.Is(err, io.EOF) {
-						return nil
-					}
-					return err
-				}
+				data := strings.Join(dataLines, "\n")
 				dataLines = dataLines[:0]
+				if data == "[DONE]" {
+					break
+				}
+				var obj map[string]any
+				if err := json.Unmarshal([]byte(data), &obj); err == nil {
+					if handleEvent(obj) {
+						break
+					}
+				}
 			}
 			continue
 		}
@@ -431,24 +443,21 @@ func streamResponse(req ChatRequest, tools []map[string]any, body []byte, onEven
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
+
+	for _, id := range callOrder {
+		call := callMap[id]
+		if call == nil || call.Name == "" {
+			continue
+		}
+		result.ToolCalls = append(result.ToolCalls, *call)
+	}
+	return result, nil
 }
 
-func extractToolCallFromOutput(items []any) *toolCall {
-	for _, item := range items {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if typ, _ := obj["type"].(string); typ != "function_call" {
-			continue
-		}
-		callID, _ := obj["call_id"].(string)
-		name, _ := obj["name"].(string)
-		args, _ := obj["arguments"].(string)
-		if callID == "" || name == "" {
-			continue
-		}
-		return &toolCall{CallID: callID, Name: name, Arguments: args}
+func stringify(obj map[string]any) string {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return ""
 	}
-	return nil
+	return string(data)
 }

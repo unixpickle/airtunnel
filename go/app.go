@@ -15,6 +15,7 @@ const (
 	appTypeChunk    = 0x01
 	appTypePoll     = 0x02
 	appTypeDone     = 0x03
+	appTypeMetaReq  = 0x04
 	appTypeAck      = 0x81
 	appTypeResp     = 0x82
 	appTypeError    = 0x83
@@ -60,7 +61,6 @@ type ResponseState struct {
 	ResponseID string
 	ErrorMsg   string
 	IsError    bool
-	MetaSent   bool
 	Updated    time.Time
 }
 
@@ -111,6 +111,8 @@ func (a *AppServer) Handle(sessionID []byte, payload []byte) ([]byte, error) {
 		return a.handlePoll(sessionID, payload)
 	case appTypeDone:
 		return a.handleDone(sessionID, payload)
+	case appTypeMetaReq:
+		return a.handleMeta(sessionID, payload)
 	default:
 		return a.errorResp(nil, "unknown message type"), nil
 	}
@@ -228,11 +230,6 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 	resp.mu.Lock()
 	defer resp.mu.Unlock()
 
-	if resp.Done && resp.ResponseID != "" && !resp.MetaSent {
-		log.Printf("app: sending response_id=%s", resp.ResponseID)
-		resp.MetaSent = true
-		return a.metaResp(msgID, resp.ResponseID), nil
-	}
 	if nextOffset < uint32(len(resp.Buffer)) {
 		// Sending response chunk.
 		end := len(resp.Buffer)
@@ -259,6 +256,23 @@ func (a *AppServer) handlePoll(sessionID []byte, payload []byte) ([]byte, error)
 		return a.responseResp(msgID, 0, nil, false, false, true), nil
 	}
 	return a.responseResp(msgID, nextOffset, nil, false, true, false), nil
+}
+
+func (a *AppServer) handleMeta(sessionID []byte, payload []byte) ([]byte, error) {
+	if len(payload) < 1+msgIDSize {
+		return a.errorResp(nil, "malformed meta request"), nil
+	}
+	msgID := payload[1 : 1+msgIDSize]
+	key := a.scopedKey(sessionID, msgID)
+	a.mu.Lock()
+	resp := a.responses[key]
+	a.mu.Unlock()
+	if resp == nil {
+		return a.metaResp(msgID, ""), nil
+	}
+	resp.mu.Lock()
+	defer resp.mu.Unlock()
+	return a.metaResp(msgID, resp.ResponseID), nil
 }
 
 func (a *AppServer) handleDone(sessionID []byte, payload []byte) ([]byte, error) {

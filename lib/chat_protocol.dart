@@ -23,6 +23,7 @@ class DnsChatClient {
   static const int _typeChunk = 0x01;
   static const int _typePoll = 0x02;
   static const int _typeDone = 0x03;
+  static const int _typeMetaReq = 0x04;
 
   static const int _typeAck = 0x81;
   static const int _typeRespChunk = 0x82;
@@ -76,11 +77,6 @@ class DnsChatClient {
       if (response is _PollError) {
         throw StateError(response.message);
       }
-      if (response is _PollMeta) {
-        yield ChatChunk(responseId: response.responseId);
-        lastProgress = DateTime.now();
-        continue;
-      }
       if (response is _PollPending) {
         if (DateTime.now().difference(startTime) > const Duration(minutes: 5) &&
             DateTime.now().difference(lastProgress) >
@@ -132,6 +128,12 @@ class DnsChatClient {
           yield ChatChunk(done: true);
           break;
         }
+      }
+    }
+    if (!sawError) {
+      final responseId = await _fetchResponseId(msgId);
+      if (responseId.isNotEmpty) {
+        yield ChatChunk(responseId: responseId);
       }
     }
   }
@@ -229,9 +231,6 @@ class DnsChatClient {
     if (parsed is _ErrorResp) {
       return _PollError(parsed.message);
     }
-    if (parsed is _MetaResp) {
-      return _PollMeta(parsed.responseId);
-    }
     if (parsed is _ChunkResp) {
       if (parsed.pending) {
         return _PollPending();
@@ -283,6 +282,40 @@ class DnsChatClient {
       return _ChunkResp(data, done: done, pending: pending, isError: isError);
     }
     return _ErrorResp('Unknown response type');
+  }
+
+  Future<String> _fetchResponseId(Uint8List msgId) async {
+    const backoff = [
+      Duration(milliseconds: 500),
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+    ];
+    var backoffIndex = 0;
+    while (true) {
+      final resp = await _requestMeta(msgId);
+      if (resp.isNotEmpty) {
+        return resp;
+      }
+      await Future.delayed(backoff[backoffIndex]);
+      if (backoffIndex < backoff.length - 1) {
+        backoffIndex++;
+      }
+    }
+  }
+
+  Future<String> _requestMeta(Uint8List msgId) async {
+    final buffer = BytesBuilder();
+    buffer.addByte(_typeMetaReq);
+    buffer.add(msgId);
+    final resp = await _channel.send(buffer.takeBytes());
+    if (resp.isEmpty) {
+      return '';
+    }
+    final parsed = _parseResponse(resp);
+    if (parsed is _MetaResp) {
+      return parsed.responseId;
+    }
+    return '';
   }
 }
 
@@ -340,12 +373,6 @@ class _PollError extends _PollResult {
   _PollError(this.message);
 
   final String message;
-}
-
-class _PollMeta extends _PollResult {
-  _PollMeta(this.responseId);
-
-  final String responseId;
 }
 
 Uint8List _u32(int value) {

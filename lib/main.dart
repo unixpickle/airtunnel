@@ -766,6 +766,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       String? pendingResponseId;
+      final buffer = BytesBuilder();
       await for (final chunk in stream) {
         if (!mounted) {
           break;
@@ -773,9 +774,11 @@ class _ChatScreenState extends State<ChatScreen> {
         if (chunk.responseId != null) {
           pendingResponseId = chunk.responseId;
         }
-        if (chunk.delta != null && chunk.delta!.isNotEmpty) {
+        if (chunk.deltaBytes != null && chunk.deltaBytes!.isNotEmpty) {
+          buffer.add(chunk.deltaBytes!);
+          final text = utf8.decode(buffer.toBytes(), allowMalformed: true);
           setState(() {
-            chat.messages.last.text += chunk.delta!;
+            chat.messages.last.text = text;
             if (chat.title == 'New chat') {
               chat.title = _titleFrom(chat.messages.first.text);
             }

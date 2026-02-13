@@ -5,10 +5,10 @@ import 'dart:typed_data';
 import 'secure_channel.dart';
 
 class ChatChunk {
-  ChatChunk({this.responseId, this.delta, this.done = false});
+  ChatChunk({this.responseId, this.deltaBytes, this.done = false});
 
   final String? responseId;
-  final String? delta;
+  final Uint8List? deltaBytes;
   final bool done;
 }
 
@@ -102,16 +102,14 @@ class DnsChatClient {
         }
         lastErrorFlag = response.isError;
         if (response.data.isNotEmpty) {
-          final text = utf8.decode(response.data, allowMalformed: true);
           if (response.isError) {
+            final text = utf8.decode(response.data, allowMalformed: true);
             errorBuffer.write(text);
             sawError = true;
           } else {
-            yield ChatChunk(delta: text);
-            if (text.isNotEmpty) {
-              sawDelta = true;
-              lastProgress = DateTime.now();
-            }
+            yield ChatChunk(deltaBytes: response.data);
+            sawDelta = true;
+            lastProgress = DateTime.now();
           }
         }
         nextOffset += response.data.length;
